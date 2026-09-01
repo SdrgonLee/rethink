@@ -75,7 +75,7 @@ describe('FX___N', () => {
         assert.equal(p.course, 'Normal')
         assert.equal(p.remaining_time, 0)
         assert.equal(p.initial_time, 0)
-        assert.equal(p.error, 'None')
+        assert.equal(p.error, 'No error')
         assert.equal(p.tub_clean_count, 12)
     })
 

@@ -104,7 +104,8 @@ const STATUS: Record<number, string> = {
 }
 
 const ERROR: Record<number, string> = {
-    0: 'None',
+    // Home Assistant reserves "None" as an unknown state in MQTT sensor values.
+    0: 'No error',
     2: 'IE',
     3: 'OE',
     4: 'UE',
