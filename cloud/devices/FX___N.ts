@@ -11,15 +11,18 @@ import { allowExtendedType } from '@/util/casting'
 // 67-byte washer-only block. Captured frame types:
 //   0x55  state resync: 13-byte header + one 67-byte state block + trailer
 //   0x98  state update: 13-byte header + old block + current block + trailer
+//   0xE6  compact state snapshot: 9-byte header + one 67-byte state block
 //   0x18  door event: inner[18] is 1=open, 2=closed
 //
 // Offsets were established from a labelled power/door capture and checked against FX___N ModelJSON.
 // This handler is intentionally read-only: no command frames have been captured and verified yet.
 
 const HEADER_LENGTH = 13
+const COMPACT_HEADER_LENGTH = 9
 const STATE_BLOCK_LENGTH = 67
 const RESYNC_TYPE = 0x55
 const UPDATE_TYPE = 0x98
+const COMPACT_TYPE = 0xe6
 const DOOR_TYPE = 0x18
 const DOOR_OFFSET = 18
 
@@ -294,13 +297,35 @@ export default class Device extends AABBDevice {
     processAABB(buf: Buffer) {
         if (buf[0] !== 0x20 || buf.length < 4) return
 
+        // Compact snapshots put their type at inner[1], unlike the extended 0x0A envelope. Validate
+        // the complete captured prefix because other LG protocols can also use a 0xE6 message type.
+        if (
+            buf[1] === COMPACT_TYPE &&
+            buf.length === COMPACT_HEADER_LENGTH + STATE_BLOCK_LENGTH &&
+            buf.subarray(0, COMPACT_HEADER_LENGTH).equals(Buffer.from('20E6000001FF010200', 'hex'))
+        ) {
+            return this.processStateBlock(buf.subarray(COMPACT_HEADER_LENGTH))
+        }
+
         if (buf[3] === DOOR_TYPE) return this.processDoor(buf)
         if (buf[3] === RESYNC_TYPE) {
-            if (buf.length !== HEADER_LENGTH + STATE_BLOCK_LENGTH + 1 || buf[12] !== STATE_BLOCK_LENGTH) return
+            if (
+                buf.length !== HEADER_LENGTH + STATE_BLOCK_LENGTH + 1 ||
+                buf[10] !== 0xeb ||
+                buf[11] !== 0x00 ||
+                buf[12] !== STATE_BLOCK_LENGTH
+            )
+                return
             return this.processStateBlock(buf.subarray(HEADER_LENGTH, HEADER_LENGTH + STATE_BLOCK_LENGTH))
         }
         if (buf[3] === UPDATE_TYPE) {
-            if (buf.length !== HEADER_LENGTH + STATE_BLOCK_LENGTH * 2 + 1 || buf[12] !== STATE_BLOCK_LENGTH * 2) return
+            if (
+                buf.length !== HEADER_LENGTH + STATE_BLOCK_LENGTH * 2 + 1 ||
+                buf[10] !== 0xec ||
+                buf[11] !== 0x00 ||
+                buf[12] !== STATE_BLOCK_LENGTH * 2
+            )
+                return
             const current = HEADER_LENGTH + STATE_BLOCK_LENGTH
             return this.processStateBlock(buf.subarray(current, current + STATE_BLOCK_LENGTH))
         }

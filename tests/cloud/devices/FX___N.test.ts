@@ -19,6 +19,12 @@ const POWER_ON = buf(
 const POWER_OFF = buf(
     'AAFF200A009800229D000100EC008600030302062E00000000000000002300230000002E010005000000020C040000000020000000000038000000000000040000000000000000000000000000001800000000030300062E00000000000000000100000000002E000105000000000C040000000020000000000038000000000000040000000000000000000000000000001800000028F8BB',
 )
+const COMPACT_POWER_ON = buf(
+    'AA5020E6000001FF01020000030302062E00000000000000002300230000002E010005000000020C04000000002000000000003800000000000004000000000000000000000000000000180000006ABB',
+)
+const COMPACT_POWER_OFF = buf(
+    'AA5020E6000001FF01020000030300062E00000000000000000100000000002E000105000000000C0400000000200000000000380000000000000400000000000000000000000000000018000000A3BB',
+)
 const DOOR_CLOSED = buf('AAFF200A0018002283000101030006100B0B0110029536BB')
 const DOOR_OPEN = buf('AAFF200A0018002285000101030006100B0B0110012A3EBB')
 
@@ -101,6 +107,24 @@ describe('FX___N', () => {
         assert.equal(p.tub_clean_count, 12)
     })
 
+    test('real compact 0xE6 snapshots correct retained state on power-on and power-off', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', COMPACT_POWER_ON)
+        const p = ha.devices[DEVICE_ID].properties
+        assert.equal(p.power, 'ON')
+        assert.equal(p.status, 'Initial')
+        assert.equal(p.remaining_time, 35)
+        assert.equal(p.initial_time, 35)
+        assert.equal(p.course, 'Normal')
+
+        thinq.emit('data', COMPACT_POWER_OFF)
+        assert.equal(p.power, 'OFF')
+        assert.equal(p.status, 'Off')
+        assert.equal(p.remaining_time, 0)
+        assert.equal(p.initial_time, 0)
+        assert.equal(p.tub_clean_count, 12)
+    })
+
     test('real 0x18 events decode door close and open', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', DOOR_CLOSED)
@@ -114,6 +138,12 @@ describe('FX___N', () => {
         thinq.emit('data', DOOR_OPEN)
         thinq.emit('data', buf('AAFF200A0018002285000101030006110B0B0111050D00BB'))
         thinq.emit('data', buf('AA10200A0055000000000000430000BB'))
+        const wrongSubtype = Buffer.from(OFF_RESYNC)
+        wrongSubtype[12] = 0xea // full[12] = inner[10], must be the captured 0xEB state subtype
+        thinq.emit('data', wrongSubtype)
+        const wrongCompactPrefix = Buffer.from(COMPACT_POWER_OFF)
+        wrongCompactPrefix[8] = 0x02 // full[8] = inner[6], captured compact prefix requires 0x01
+        thinq.emit('data', wrongCompactPrefix)
         assert.equal(ha.devices[DEVICE_ID].properties.door, 'ON')
         assert.equal(ha.devices[DEVICE_ID].properties.power, undefined)
     })
