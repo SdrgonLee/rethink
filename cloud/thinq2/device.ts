@@ -8,6 +8,7 @@ import { ClipDeployMessage, ClipMessage } from './clip'
 
 import log from '@/util/logging'
 import { Metadata } from '../thinq'
+import type { BridgeMessage } from './bridge-message'
 
 type DeviceEvents = {
     data: (packet: Buffer) => void
@@ -28,6 +29,26 @@ export class Device extends TypedEmitter<DeviceEvents> {
         super()
     }
 
+    private bridgeMessageListeners = new Set<(message: BridgeMessage) => void>()
+
+    onBridgeMessage(listener: (message: BridgeMessage) => void) {
+        this.bridgeMessageListeners.add(listener)
+    }
+
+    removeBridgeMessageListener(listener: (message: BridgeMessage) => void) {
+        this.bridgeMessageListeners.delete(listener)
+    }
+
+    emitBridgeMessage(message: BridgeMessage) {
+        for (const listener of this.bridgeMessageListeners) {
+            try {
+                listener(message)
+            } catch (err) {
+                console.warn('ThinQ2 bridge message listener failed', err)
+            }
+        }
+    }
+
     send(cmd: string, type: number, data: string | object) {
         const messagestr = JSON.stringify({ did: this.id, mid: Date.now(), cmd: cmd, type: type, data: data })
         this.broker.publish(
@@ -39,6 +60,19 @@ export class Device extends TypedEmitter<DeviceEvents> {
     send_packet(buf: Buffer) {
         this.emit('sendData', buf)
         this.send('packet', 1, buf.toString('hex'))
+    }
+
+    sendBridgeMessage(message: BridgeMessage) {
+        this.broker.publish(
+            {
+                topic: this.topic,
+                retain: false,
+                qos: 0,
+                dup: false,
+                payload: message.payload,
+            },
+            null,
+        )
     }
 }
 
@@ -72,8 +106,14 @@ export class DeviceAcceptor extends TypedEmitter<DeviceAcceptorEvents> {
 
             try {
                 if (packet.topic.indexOf('clip/') >= 0) {
-                    const payload = JSON.parse(trimNull(Buffer.from(packet.payload)).toString('utf-8'))
-                    this.mqtt(packet.topic, payload, client as ClientWithExtra)
+                    const rawPayload = Buffer.from(packet.payload)
+                    const payload = JSON.parse(trimNull(rawPayload).toString('utf-8'))
+                    this.mqtt(packet.topic, payload, client as ClientWithExtra, {
+                        sourceTopic: packet.topic,
+                        qos: packet.qos,
+                        retain: packet.retain,
+                        payload: rawPayload,
+                    })
                 }
             } catch (err) {
                 console.warn(err, packet.payload.toString('hex'))
@@ -83,24 +123,31 @@ export class DeviceAcceptor extends TypedEmitter<DeviceAcceptorEvents> {
         broker.on('disconnect', this.disconnected.bind(this))
     }
 
-    mqtt(topic: string, payload: ClipMessage, client: ClientWithExtra) {
+    mqtt(topic: string, payload: ClipMessage, client: ClientWithExtra, bridgeMessage?: BridgeMessage) {
         // experiment: try to support devices which use other topic formats
         topic = topic.replace(/^.*\/clip/, 'clip')
 
         if (topic === 'clip/message/devices/' + payload.did) {
             if (payload.cmd === 'completeProvisioning_ack') {
                 this.completeProvisioning(payload.did, payload, client)
-            }
-
-            if (payload.cmd === 'device_packet' && payload.did === client.deployMsg?.did) {
-                if (client.deviceObj) {
-                    const buf = Buffer.from(payload.data as string, 'hex')
-                    client.deviceObj.emit('data', buf)
-                }
+                return
             }
 
             if (payload.cmd === 'req_timesync' && client.deployMsg && payload.did === client.deployMsg.did) {
                 this.timeSyncRequest(client)
+                return
+            }
+
+            if (client.deviceObj && payload.did === client.deviceObj.id) {
+                if (bridgeMessage) client.deviceObj.emitBridgeMessage(bridgeMessage)
+
+                if (payload.cmd === 'device_packet' && typeof payload.data === 'string') {
+                    try {
+                        client.deviceObj.emit('data', Buffer.from(payload.data, 'hex'))
+                    } catch (err) {
+                        console.warn('ThinQ2 device data listener failed', err)
+                    }
+                }
             }
         }
 

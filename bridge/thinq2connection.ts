@@ -2,9 +2,11 @@ import * as mqtt from 'mqtt'
 import { Thinq2Device } from './thinqApi'
 import { TypedEmitter } from 'tiny-typed-emitter'
 import log from '@/util/logging'
+import type { BridgeMessage } from '@/cloud/thinq2/bridge-message'
 
 type ConnectionEvents = {
     data: (buffer: Buffer) => void
+    bridgeMessage: (message: BridgeMessage) => void
     close: () => void
     error: (error: Error) => void
 }
@@ -13,11 +15,14 @@ export class Connection extends TypedEmitter<ConnectionEvents> {
     mqtt: mqtt.MqttClient
     mid = 10000
 
-    constructor(readonly device: Thinq2Device) {
+    constructor(
+        readonly device: Thinq2Device,
+        connect: typeof mqtt.connect = mqtt.connect,
+    ) {
         super()
         const state = this.device.state!
         log('bridge', `${this.device.deviceId} connecting to ${state.mqttServer}`)
-        this.mqtt = mqtt.connect(state.mqttServer.replace('ssl', 'mqtts'), {
+        this.mqtt = connect(state.mqttServer.replace('ssl', 'mqtts'), {
             ca: state.caCertificate,
             key: state.privateKey,
             cert: state.certificate,
@@ -28,7 +33,12 @@ export class Connection extends TypedEmitter<ConnectionEvents> {
         this.mqtt.on('message', (topic, message, packet) => {
             try {
                 if (topic === this.device.state!.subTopic) {
-                    const payload = JSON.parse(message.toString('utf-8'))
+                    const rawPayload = Buffer.from(message)
+                    const payload = JSON.parse(rawPayload.toString('utf-8'))
+                    if (payload.did !== this.device.deviceId) {
+                        console.warn(`Ignoring ThinQ2 cloud message for unexpected device ${payload.did}`)
+                        return
+                    }
                     if (payload.cmd === 'completeProvisioning') {
                         //msgtopic=payload.data.appInfo.publication.message
                         this.mqtt.publish(
@@ -44,12 +54,16 @@ export class Connection extends TypedEmitter<ConnectionEvents> {
                                 type: 1,
                             }),
                         )
+                        return
                     }
 
-                    if (payload.cmd === 'packet') {
-                        log('bridge', `${this.device.deviceId} <- ${payload.data}`)
-                        this.emit('data', Buffer.from(payload.data, 'hex'))
-                    }
+                    log('bridge', `${this.device.deviceId} <- ${payload.cmd}`)
+                    this.emit('bridgeMessage', {
+                        sourceTopic: topic,
+                        qos: packet.qos,
+                        retain: packet.retain,
+                        payload: rawPayload,
+                    })
                 }
             } catch (err) {
                 console.log(err)
@@ -126,6 +140,11 @@ export class Connection extends TypedEmitter<ConnectionEvents> {
                 type: 1,
             }),
         )
+    }
+
+    forward(message: BridgeMessage) {
+        log('bridge', `${this.device.deviceId} -> application message`)
+        this.mqtt.publish(this.device.state!.pubTopic, message.payload, { qos: 0, retain: false })
     }
 
     destroy() {

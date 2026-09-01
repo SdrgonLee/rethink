@@ -11,6 +11,8 @@
 
   "ca_key_file": "ca.key", // will be created on first run if necessary
   "ca_cert_file": "ca.cert", // will be created on first run if necessary
+  // Present a CA-signed leaf certificate matching each valid TLS SNI hostname.
+  "sni_certificates": false,
 
   // If port forwarding or other redirection is involved, the bind port may not match
   // the port that the device will connect to from the outside.
@@ -36,7 +38,10 @@
   "management_port": 44401,
 
   "bridge": {
-    "storage_path": "./state"
+    "storage_path": "./state",
+    // Opt in to preserving an existing ThinQ2 Home registration and alias.
+    // ThinQ1 bridge registration is rejected while this safety mode is enabled.
+    "preserve_existing_devices": false
   },
 
   "log": ["status", "incoming", "HTTPS", "publish", "MGMT"]

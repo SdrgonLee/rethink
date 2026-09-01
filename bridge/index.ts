@@ -5,6 +5,7 @@ import {
     signInUrl,
     Thinq1Device,
     Thinq2Device,
+    type HomeDevice,
 } from './thinqApi'
 import { AnyDevice, DeviceManager } from '../cloud/devmgr'
 import * as OAuth2 from './oauth2'
@@ -14,8 +15,30 @@ import { Connection as Thinq2Connection } from './thinq2connection'
 import { Device as T1Downstream } from '@/cloud/thinq1/device'
 import { Device as T2Downstream } from '@/cloud/thinq2/device'
 import { TypedEmitter } from 'tiny-typed-emitter'
+import type { Metadata } from '@/cloud/thinq'
+import type { BridgeMessage } from '@/cloud/thinq2/bridge-message'
 
 type StatusCallback = (status: string) => void
+
+type RegistrationPlan = 'replace' | 'preserve' | 'add'
+
+export function registrationPlan(
+    platform: AnyDevice['platform'],
+    deviceId: string,
+    preserveExistingDevices: boolean,
+    homeDevices: readonly HomeDevice[] = [],
+): RegistrationPlan {
+    if (!preserveExistingDevices) return 'replace'
+    if (platform !== 'thinq2') {
+        throw new Error('Preserving an existing LG registration is supported only for ThinQ2 devices')
+    }
+    return homeDevices.some((device) => device.deviceId === deviceId) ? 'preserve' : 'add'
+}
+
+type BridgeOptions = {
+    preserveExistingDevices?: boolean
+    createThinq2Device?: (deviceId: string, meta: Metadata) => Thinq2Device
+}
 
 const RECONNECT_PERIOD = 5000
 
@@ -28,6 +51,9 @@ class BridgedDevice {
     ) {
         // we create the functions at runtime so that they have unique identities that can be removed with removeListener
         this.onDownstreamData = (packet: Buffer) => this.connection?.send(packet)
+        this.onDownstreamBridgeMessage = (message: BridgeMessage) => {
+            if (this.connection instanceof Thinq2Connection) this.connection.forward(message)
+        }
         this.onDownstreamClose = () => this.destroy()
 
         if (this.upstream.platformType !== this.downstream.platform) {
@@ -35,13 +61,15 @@ class BridgedDevice {
             return
         }
 
-        downstream.on('data', this.onDownstreamData)
+        if (downstream instanceof T1Downstream) downstream.on('data', this.onDownstreamData)
+        if (downstream instanceof T2Downstream) downstream.onBridgeMessage(this.onDownstreamBridgeMessage)
         downstream.on('close', this.onDownstreamClose)
 
         this.reconnectNow()
     }
 
     onDownstreamData: (packet: Buffer) => void
+    onDownstreamBridgeMessage: (message: BridgeMessage) => void
     onDownstreamClose: () => void
 
     connection: Thinq1Connection | Thinq2Connection | undefined
@@ -50,21 +78,24 @@ class BridgedDevice {
         const U = this.upstream
         const D = this.downstream
         if (U instanceof Thinq1Device && D instanceof T1Downstream) {
-            this.connection = new Thinq1Connection(U)
+            const connection = new Thinq1Connection(U)
+            this.connection = connection
             // feed the initial state to the connection
-            if (D.lastReport) this.connection.send(D.lastReport)
+            if (D.lastReport) connection.send(D.lastReport)
 
-            this.connection.on('data', (payload) => D.send(payload))
+            connection.on('data', (payload) => D.send(payload))
+            connection.on('close', () => this.disconnect())
+            connection.on('error', console.log)
         } else if (U instanceof Thinq2Device && D instanceof T2Downstream) {
-            this.connection = new Thinq2Connection(U)
-            this.connection.on('data', (payload) => D.send_packet(payload))
+            const connection = new Thinq2Connection(U)
+            this.connection = connection
+            connection.on('bridgeMessage', (message) => D.sendBridgeMessage(message))
+            connection.on('close', () => this.disconnect())
+            connection.on('error', console.log)
         } else {
             console.warn("Can't connect bridge")
             return
         }
-
-        this.connection.on('close', () => this.disconnect())
-        this.connection.on('error', console.log)
     }
 
     reconnectTimeout: NodeJS.Timeout | undefined
@@ -83,7 +114,12 @@ class BridgedDevice {
             this.connection.destroy()
             this.connection = undefined
         }
-        this.downstream.removeListener('data', this.onDownstreamData)
+        if (this.downstream instanceof T1Downstream) {
+            this.downstream.removeListener('data', this.onDownstreamData)
+        }
+        if (this.downstream instanceof T2Downstream) {
+            this.downstream.removeBridgeMessageListener(this.onDownstreamBridgeMessage)
+        }
         this.downstream.removeListener('close', this.onDownstreamClose)
         clearTimeout(this.reconnectTimeout)
         this.reconnectTimeout = undefined
@@ -113,6 +149,7 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
     constructor(
         readonly state: BridgeState,
         readonly manager: DeviceManager,
+        readonly options: BridgeOptions = {},
     ) {
         super()
         this.manager.on('newDevice', this.#start.bind(this))
@@ -273,8 +310,18 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
 
         if (!deviceType) throw new Error('Device type must be specified')
 
-        statusCallback('Removing device from home')
-        await client.removeDevice(device.id)
+        let homeDevices: HomeDevice[] = []
+        if (this.options.preserveExistingDevices) {
+            // Reject unsupported platforms before making even a read-only account request.
+            registrationPlan(device.platform, device.id, true)
+            homeDevices = await client.listDevices()
+        }
+        const plan = registrationPlan(device.platform, device.id, !!this.options.preserveExistingDevices, homeDevices)
+
+        if (plan === 'replace') {
+            statusCallback('Removing device from home')
+            await client.removeDevice(device.id)
+        }
 
         let clientDevice: Thinq1Device | Thinq2Device
 
@@ -293,7 +340,8 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
             statusCallback('Fetching otp key')
             const otp = await client.prepareNewT2Device()
 
-            const t2 = new Thinq2Device(device.id, device.meta)
+            const t2 =
+                this.options.createThinq2Device?.(device.id, device.meta) ?? new Thinq2Device(device.id, device.meta)
             clientDevice = t2
 
             statusCallback('Registering new device')
@@ -305,14 +353,26 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
                 throw err
             }
 
-            statusCallback('Adding device to home')
-            await client.addDevice(clientDevice, `Rethink ${device.id.substring(0, 8)}`, deviceType, ciphertext)
+            if (plan === 'preserve') {
+                const existing = homeDevices.find((item) => item.deviceId === device.id)!
+                statusCallback(`Preserving existing device registration (${existing.alias})`)
+            } else {
+                statusCallback('Adding device to home')
+                await client.addDevice(
+                    clientDevice,
+                    `Rethink ${device.id.substring(0, 8)}`,
+                    deviceType,
+                    ciphertext,
+                    plan === 'replace',
+                )
+            }
         } else {
             throw new Error('Unknown device platform')
         }
 
         statusCallback('Device registered successfully')
 
+        if (!clientDevice.state) throw new Error('Device registration completed without bridge state')
         this.state.setDeviceState(device.id, clientDevice.state)
         return clientDevice
     }

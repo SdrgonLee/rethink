@@ -10,8 +10,10 @@ export type RawConfig = {
     thinq1_https_port?: Port | number
     thinq1_port?: Port | number
     mqtt?: boolean
+    sni_certificates?: boolean
     bridge?: {
         storage_path: string
+        preserve_existing_devices?: boolean
     }
     log?: string[]
 }
@@ -28,8 +30,10 @@ export type Config = {
     thinq1_https_port: Port
     thinq1_port: Port
     mqtt: boolean
+    sni_certificates: boolean
     bridge?: {
         storage_path: string
+        preserve_existing_devices: boolean
     }
     log: string[]
 }
@@ -63,7 +67,14 @@ export function normalize(config: RawConfig): Config {
     return {
         log: ['status', 'incoming', 'HTTPS'],
         mqtt: true,
+        sni_certificates: false,
         ...config,
+        bridge: config.bridge
+            ? {
+                  preserve_existing_devices: false,
+                  ...config.bridge,
+              }
+            : undefined,
         https_port: parsePort(config.https_port),
         mqtts_port: parsePort(config.mqtts_port),
         mqtt_port: parsePort(config.mqtt_port),

@@ -95,6 +95,50 @@ type HomeResponse = {
     }[]
 }
 
+type HomeRegistrationBody = {
+    deviceId: string
+    countryCode: string
+    deviceType: string
+    modelName: string
+    aliasPrefix: string
+    platformType: Device['platformType']
+    ciphertext?: string
+    initDevice: boolean
+}
+
+export async function addDeviceToHome(
+    request: (url: string, options: RequestInit) => Promise<unknown>,
+    url: string,
+    headers: Record<string, string>,
+    body: HomeRegistrationBody,
+    allowInitDeviceRecovery: boolean,
+) {
+    const post = () =>
+        request(url, {
+            headers,
+            method: 'POST',
+            body: JSON.stringify(body),
+        })
+
+    try {
+        await post()
+    } catch (err) {
+        if (!(err instanceof RemoteError) || err.resultCode !== ErrorCodes.ERROR_ALREADY_DEVICES_REGISTERED_IN_HOME) {
+            throw err
+        }
+        if (!allowInitDeviceRecovery) {
+            throw new Error(
+                `LG reported ${body.deviceId} as already registered, but it is not visible in the current Home; refusing initDevice:true recovery (${err.message})`,
+            )
+        }
+        console.log('Device already registered, retrying with initDevice=true')
+        body.initDevice = true
+        await post()
+    }
+}
+
+export type HomeDevice = HomeResponse['devices'][number]
+
 type OtpResponse = { otp: string; publicKey: string }
 
 type ModelJsonResponse = {
@@ -231,7 +275,13 @@ export class Client {
 
     // setting initDevice to true allows the device to be removed from the current account, but it triggers a failure if the device is not currently registered
     // ciphertext is required for Thinq2 devices
-    async addDevice(device: Device, alias: string, deviceType: string, ciphertext?: Buffer) {
+    async addDevice(
+        device: Device,
+        alias: string,
+        deviceType: string,
+        ciphertext?: Buffer,
+        allowInitDeviceRecovery = true,
+    ) {
         if (!this.homeId) throw new Error('Current home is not set')
 
         const { thinq2Uri } = await this.gateway
@@ -246,25 +296,13 @@ export class Client {
             initDevice: false,
         }
 
-        try {
-            await apiFetch(`${thinq2Uri}/service/homes/${this.homeId}/devices`, {
-                headers: this.headers,
-                method: 'POST',
-                body: JSON.stringify(body),
-            })
-        } catch (err) {
-            if (err instanceof RemoteError && err.resultCode === ErrorCodes.ERROR_ALREADY_DEVICES_REGISTERED_IN_HOME) {
-                console.log('Device already registered, retrying with initDevice=true')
-                body.initDevice = true
-                await apiFetch(`${thinq2Uri}/service/homes/${this.homeId}/devices`, {
-                    headers: this.headers,
-                    method: 'POST',
-                    body: JSON.stringify(body),
-                })
-            } else {
-                throw err
-            }
-        }
+        await addDeviceToHome(
+            apiFetch,
+            `${thinq2Uri}/service/homes/${this.homeId}/devices`,
+            this.headers,
+            body,
+            allowInitDeviceRecovery,
+        )
     }
 
     // The modelJSON describes the capabilities of a device model (field layouts, enum values,

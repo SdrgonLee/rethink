@@ -55,6 +55,13 @@ Most of the findings from the reverse engineering process are available on the [
 
 See the [instructions](https://github.com/anszom/rethink/wiki/Installing-rethink‐cloud).
 
+### TLS SNI certificates
+
+When appliance traffic is redirected with DNAT, the TLS ClientHello can still name the original LG or AWS IoT
+hostname. Set `"sni_certificates": true` to generate and cache a hostname-specific server leaf certificate signed by
+rethink's existing CA. The runtime must provide the `openssl` command. Keep `ca.key` private: possession of this key
+allows certificates trusted by appliances configured with that CA to be created.
+
 ## Management
 
 A simple web interface is available on a user-defined port (default: 44401). The interface supports:
