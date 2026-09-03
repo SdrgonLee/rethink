@@ -15,8 +15,8 @@ import { allowExtendedType } from '@/util/casting'
 //   0x18  door event: inner[18] is 1=open, 2=closed
 //
 // Offsets were established from labelled power/door and full-cycle captures and checked against FX___N
-// ModelJSON. Power control is the only writable feature: ON and OFF were each reproduced twice through
-// the official ThinQ app. All cycle, option, start and pause entities remain intentionally read-only.
+// ModelJSON. Power and the cycle-setting controls below reproduce frames captured from the official
+// ThinQ app. Start, pause and post-cycle laundry-care controls remain intentionally unavailable.
 
 const HEADER_LENGTH = 13
 const COMPACT_HEADER_LENGTH = 9
@@ -67,6 +67,80 @@ const COURSE: Record<number, string> = {
     0x72: 'AI Wash',
     0x88: 'Microplastic Care',
 }
+
+type LocalOption = { code: number; en: string; ko: string }
+type CycleSetting = 'soil' | 'rinse' | 'spin' | 'temperature' | 'turbo'
+type PendingSettings = {
+    course?: number
+    soil?: number
+    rinse?: number
+    spin?: number
+    temperature?: number
+    turbo?: number
+}
+
+const COURSE_OPTIONS: LocalOption[] = [
+    { code: 0x08, en: 'Baby Care', ko: '아기옷' },
+    { code: 0x1b, en: 'Duvet', ko: '이불' },
+    { code: 0x2e, en: 'Normal', ko: '표준' },
+    { code: 0x37, en: 'Rinse + Spin', ko: '헹굼+탈수' },
+    { code: 0x4a, en: 'Speed Wash', ko: '소량급속' },
+    { code: 0x4c, en: 'Speed Boil', ko: '알뜰삶음' },
+    { code: 0x4e, en: 'Spin Only', ko: '탈수 단독' },
+    { code: 0x55, en: 'Tub Clean', ko: '통살균' },
+    { code: 0x5e, en: 'Wool', ko: '울/섬세' },
+    { code: 0x72, en: 'AI Wash', ko: '인공지능 세탁' },
+    { code: 0x88, en: 'Microplastic Care', ko: '미세플라스틱 케어' },
+]
+
+// Only values reproduced through the official app are offered as writable options. Some additional
+// raw state values exist (for example Pre-wash/Soaking soil states), but they were not sent in the
+// labelled capture and therefore stay read-only.
+const SOIL_OPTIONS: LocalOption[] = [
+    { code: 0x01, en: 'Light', ko: '적은때' },
+    { code: 0x03, en: 'Normal', ko: '표준' },
+    { code: 0x05, en: 'Heavy', ko: '강력' },
+]
+const RINSE_OPTIONS: LocalOption[] = [
+    { code: 0x01, en: '1 rinse', ko: '1회' },
+    { code: 0x02, en: '2 rinses', ko: '2회' },
+    { code: 0x03, en: '3 rinses', ko: '3회' },
+]
+const SPIN_OPTIONS: LocalOption[] = [
+    { code: 0x00, en: 'Off', ko: '꺼짐' },
+    { code: 0x01, en: 'Delicate', ko: '섬세' },
+    { code: 0x02, en: 'Low', ko: '약' },
+    { code: 0x04, en: 'Medium', ko: '중' },
+    { code: 0x06, en: 'High', ko: '강' },
+    { code: 0x08, en: 'Dry matching', ko: '건조 맞춤' },
+]
+const TEMPERATURE_OPTIONS: LocalOption[] = [
+    { code: 0x08, en: 'Cold', ko: '냉수' },
+    { code: 0x02, en: '30 °C', ko: '30℃' },
+    { code: 0x03, en: '40 °C', ko: '40℃' },
+    { code: 0x05, en: '60 °C', ko: '60℃' },
+]
+const TURBO_OPTIONS: LocalOption[] = [
+    { code: 0x00, en: 'Off', ko: '꺼짐' },
+    { code: 0x01, en: 'On', ko: '켜짐' },
+]
+
+const SETTING_OPTIONS: Record<CycleSetting, LocalOption[]> = {
+    soil: SOIL_OPTIONS,
+    rinse: RINSE_OPTIONS,
+    spin: SPIN_OPTIONS,
+    temperature: TEMPERATURE_OPTIONS,
+    turbo: TURBO_OPTIONS,
+}
+
+const CONTROL_PROPERTY: Record<CycleSetting, string> = {
+    soil: 'soil_control',
+    rinse: 'rinse_control',
+    spin: 'spin_control',
+    temperature: 'temperature_control',
+    turbo: 'turbo_wash_control',
+}
+const CYCLE_SETTINGS = Object.keys(CONTROL_PROPERTY) as CycleSetting[]
 
 const STATUS: Record<number, string> = {
     0x00: 'Off',
@@ -133,10 +207,20 @@ function minutes(block: Buffer, offset: number): number {
 }
 
 export default class Device extends AABBDevice {
+    private readonly korean: boolean
+    private poweredOn = false
+    private currentCourse: number | undefined
+    private pending: PendingSettings = {}
+    private dirty = new Set<keyof PendingSettings>()
+    private awaitingCourse: number | undefined
+    private awaitingSettings = false
+
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq)
         const korean = meta.countryCode === 'KR' || meta.subCountryCode === 'KR'
+        this.korean = korean
         const name = (english: string, koreanName: string) => (korean ? koreanName : english)
+        const options = (items: LocalOption[]) => items.map((item) => (korean ? item.ko : item.en))
         // MQTT discovery does not expose Home Assistant integration translation keys. Keep the
         // locale-specific discovery names here, while sharing stable prefixes so HA's Sensor card
         // naturally groups current operating state separately from the selected course settings.
@@ -163,6 +247,67 @@ export default class Device extends AABBDevice {
                         command_topic: '$this/power/set',
                         name: name('Power control', '전원 제어'),
                         icon: 'mdi:power',
+                    },
+                    course_control: {
+                        platform: 'select',
+                        unique_id: '$deviceid-course-control',
+                        state_topic: '$this/course_control',
+                        command_topic: '$this/course_control/set',
+                        name: name('Course selection', '코스 선택'),
+                        options: options(COURSE_OPTIONS),
+                        icon: 'mdi:playlist-edit',
+                    },
+                    soil_control: {
+                        platform: 'select',
+                        unique_id: '$deviceid-soil-control',
+                        state_topic: '$this/soil_control',
+                        command_topic: '$this/soil_control/set',
+                        name: name('Wash intensity', '세탁'),
+                        options: options(SOIL_OPTIONS),
+                        icon: 'mdi:liquid-spot',
+                    },
+                    rinse_control: {
+                        platform: 'select',
+                        unique_id: '$deviceid-rinse-control',
+                        state_topic: '$this/rinse_control',
+                        command_topic: '$this/rinse_control/set',
+                        name: name('Rinse setting', '헹굼'),
+                        options: options(RINSE_OPTIONS),
+                        icon: 'mdi:water-sync',
+                    },
+                    spin_control: {
+                        platform: 'select',
+                        unique_id: '$deviceid-spin-control',
+                        state_topic: '$this/spin_control',
+                        command_topic: '$this/spin_control/set',
+                        name: name('Spin setting', '탈수'),
+                        options: options(SPIN_OPTIONS),
+                        icon: 'mdi:rotate-right',
+                    },
+                    temperature_control: {
+                        platform: 'select',
+                        unique_id: '$deviceid-temperature-control',
+                        state_topic: '$this/temperature_control',
+                        command_topic: '$this/temperature_control/set',
+                        name: name('Wash temperature setting', '물온도'),
+                        options: options(TEMPERATURE_OPTIONS),
+                        icon: 'mdi:thermometer',
+                    },
+                    turbo_wash_control: {
+                        platform: 'select',
+                        unique_id: '$deviceid-turbo-wash-control',
+                        state_topic: '$this/turbo_wash_control',
+                        command_topic: '$this/turbo_wash_control/set',
+                        name: name('TurboWash setting', '터보샷'),
+                        options: options(TURBO_OPTIONS),
+                        icon: 'mdi:rocket-launch',
+                    },
+                    apply_cycle_settings: {
+                        platform: 'button',
+                        unique_id: '$deviceid-apply-cycle-settings',
+                        command_topic: '$this/apply_cycle_settings/set',
+                        name: name('Send to washer', '세탁기에 전송'),
+                        icon: 'mdi:send',
                     },
                     status: {
                         platform: 'sensor',
@@ -358,12 +503,114 @@ export default class Device extends AABBDevice {
     }
 
     setProperty(prop: string, mqttValue: string) {
-        if (prop !== 'power') return
+        if (prop === 'power') {
+            // Captured twice in each direction from the official ThinQ app. The final
+            // byte is the requested state; AABBDevice supplies the outer checksum.
+            if (mqttValue === 'ON') this.send(Buffer.from('F0E5000201FF010201', 'hex'))
+            else if (mqttValue === 'OFF') this.send(Buffer.from('F0E5000201FF010200', 'hex'))
+            return
+        }
 
-        // Captured twice in each direction from the official ThinQ app. The final
-        // byte is the requested state; AABBDevice supplies the outer checksum.
-        if (mqttValue === 'ON') this.send(Buffer.from('F0E5000201FF010201', 'hex'))
-        else if (mqttValue === 'OFF') this.send(Buffer.from('F0E5000201FF010200', 'hex'))
+        if (prop === 'course_control') {
+            const code = this.codeFor(COURSE_OPTIONS, mqttValue)
+            if (code === undefined) return
+            this.pending.course = code
+            this.dirty.add('course')
+            return this.publishProperty(prop, mqttValue)
+        }
+
+        const setting = CYCLE_SETTINGS.find((candidate) => CONTROL_PROPERTY[candidate] === prop)
+        if (setting !== undefined) {
+            const code = this.codeFor(SETTING_OPTIONS[setting], mqttValue)
+            if (code === undefined) return
+            this.pending[setting] = code
+            this.dirty.add(setting)
+            // ThinQ adjusts rinse when TurboWash changes. Deliberately keep HA's choices independent;
+            // the explicit send button transmits exactly what the user selected.
+            return this.publishProperty(prop, mqttValue)
+        }
+
+        if (prop !== 'apply_cycle_settings' || !this.poweredOn) return
+
+        if (
+            this.dirty.has('course') &&
+            this.pending.course !== undefined &&
+            this.pending.course !== this.currentCourse
+        ) {
+            this.awaitingCourse = this.pending.course
+            return this.send(Buffer.from([0xf0, 0xe5, 0x00, 0x02, 0x01, 0xff, 0x01, 0x0a, this.pending.course]))
+        }
+
+        this.dirty.delete('course')
+        this.publishPendingCourse()
+        this.sendPendingSettings()
+    }
+
+    private labelFor(options: LocalOption[], code: number): string | undefined {
+        const item = options.find((candidate) => candidate.code === code)
+        return item === undefined ? undefined : this.korean ? item.ko : item.en
+    }
+
+    private codeFor(options: LocalOption[], label: string): number | undefined {
+        return options.find((item) => (this.korean ? item.ko : item.en) === label)?.code
+    }
+
+    private publishPendingCourse() {
+        if (this.pending.course === undefined) return
+        const label = this.labelFor(COURSE_OPTIONS, this.pending.course)
+        if (label !== undefined) this.publishProperty('course_control', label)
+    }
+
+    private syncPendingSetting(setting: CycleSetting, code: number) {
+        if (this.dirty.has(setting)) return
+        this.pending[setting] = code
+        const label = this.labelFor(SETTING_OPTIONS[setting], code)
+        if (label !== undefined) this.publishProperty(CONTROL_PROPERTY[setting], label)
+    }
+
+    private sendPendingSettings() {
+        if (
+            ![
+                this.pending.soil,
+                this.pending.rinse,
+                this.pending.spin,
+                this.pending.temperature,
+                this.pending.turbo,
+            ].every((value) => value !== undefined)
+        )
+            return
+        if (!CYCLE_SETTINGS.some((setting) => this.dirty.has(setting))) return
+
+        const { soil, rinse, spin, temperature, turbo } = this.pending
+        this.awaitingSettings = true
+        this.send(
+            Buffer.from([
+                0xf0,
+                0xe5,
+                0x00,
+                0x02,
+                0x01,
+                0xff,
+                0x08,
+                0x1e,
+                soil!,
+                0x20,
+                rinse!,
+                0x21,
+                spin!,
+                0x1f,
+                temperature!,
+                0x35,
+                turbo!,
+                0x3e,
+                0x00,
+                0x43,
+                0x00,
+                0x7f,
+                0x00,
+                0x00,
+            ]),
+        )
     }
 
     private processDoor(buf: Buffer) {
@@ -377,6 +624,7 @@ export default class Device extends AABBDevice {
 
         const state = block[21]
         const isOff = state === 0
+        this.poweredOn = !isOff
         this.publishProperty('power', isOff ? 'OFF' : 'ON')
         this.publishProperty('status', STATUS[state] ?? 'Running')
         this.publishProperty('course', COURSE[block[5]] ?? 'unknown')
@@ -384,18 +632,56 @@ export default class Device extends AABBDevice {
         this.publishProperty('initial_time', isOff ? 0 : minutes(block, 15))
         this.publishProperty('reserve_time', isOff ? 0 : minutes(block, 11))
         this.publishProperty('soil', SOIL[block[1]] ?? 'unknown')
-        this.publishProperty('rinse', block[2])
-        this.publishProperty('temperature', TEMPERATURE[block[3]] ?? 'unknown')
+        // Labelled one-setting-at-a-time captures proved that temperature precedes rinse here.
+        // Earlier FX25 support had these two adjacent offsets reversed.
+        this.publishProperty('rinse', block[3])
+        this.publishProperty('temperature', TEMPERATURE[block[2]] ?? 'unknown')
         this.publishProperty('spin', SPIN[block[4]] ?? 'unknown')
         this.publishProperty('error', ERROR[block[19]] ?? `Unknown (${block[19]})`)
         this.publishProperty('tub_clean_count', block[28])
 
-        this.publishProperty('turbo_wash', (block[34] & 0x20) !== 0 ? 'ON' : 'OFF')
+        const turbo = (block[34] & 0x20) !== 0 ? 1 : 0
+        this.publishProperty('turbo_wash', turbo !== 0 ? 'ON' : 'OFF')
         this.publishProperty('pre_wash', (block[34] & 0x40) !== 0 ? 'ON' : 'OFF')
         this.publishProperty('steam', (block[35] & 0x10) !== 0 ? 'ON' : 'OFF')
         this.publishProperty('crease_care', (block[36] & 0x80) !== 0 ? 'ON' : 'OFF')
         this.publishProperty('child_lock', (block[37] & 0x20) !== 0 ? 'ON' : 'OFF')
         this.publishProperty('remote_start', (block[37] & 0x10) !== 0 ? 'ON' : 'OFF')
         this.publishProperty('door_lock', (block[38] & 0x01) !== 0 ? 'ON' : 'OFF')
+
+        // Powered-off blocks contain sentinels and a mixture of retained settings, so they must not
+        // replace pending controls. A powered-on state frame is the appliance's authoritative state.
+        if (isOff) return
+
+        const actual: PendingSettings = {
+            course: block[5],
+            soil: block[1],
+            temperature: block[2],
+            rinse: block[3],
+            spin: block[4],
+            turbo,
+        }
+        this.currentCourse = actual.course
+
+        if (this.awaitingSettings) {
+            this.awaitingSettings = false
+            for (const setting of CYCLE_SETTINGS) this.dirty.delete(setting)
+        }
+
+        if (!this.dirty.has('course')) {
+            this.pending.course = actual.course
+            this.publishPendingCourse()
+        }
+        for (const setting of CYCLE_SETTINGS) {
+            this.syncPendingSetting(setting, actual[setting]!)
+        }
+
+        if (this.awaitingCourse !== undefined && actual.course === this.awaitingCourse) {
+            this.awaitingCourse = undefined
+            this.dirty.delete('course')
+            this.pending.course = actual.course
+            this.publishPendingCourse()
+            this.sendPendingSettings()
+        }
     }
 }
