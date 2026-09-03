@@ -93,10 +93,14 @@ describe('FX___N', () => {
             'steam',
             'crease_care',
         ]) {
-            assert.equal(components[id].entity_category, 'config', `${id} is grouped as a cycle setting`)
+            assert.equal(components[id].entity_category, 'diagnostic', `${id} is separated from primary sensors`)
         }
         for (const id of ['power', 'status', 'remaining_time', 'initial_time', 'reserve_time', 'door']) {
             assert.equal(components[id].entity_category, undefined, `${id} remains a primary machine state`)
+        }
+        for (const [id, component] of Object.entries(components)) {
+            if (component.platform !== 'sensor' && component.platform !== 'binary_sensor') continue
+            assert.notEqual(component.entity_category, 'config', `${id} must use an MQTT-supported entity category`)
         }
         assert.equal(components.tub_clean_count.name, 'Use count')
         assert.equal(components.tub_clean_count.entity_category, undefined)
