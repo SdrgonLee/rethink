@@ -137,8 +137,13 @@ export default class Device extends AABBDevice {
         super(HA, thinq)
         const korean = meta.countryCode === 'KR' || meta.subCountryCode === 'KR'
         const name = (english: string, koreanName: string) => (korean ? koreanName : english)
-        const washSetting = (english: string, koreanName: string) =>
-            `${korean ? '세탁 설정' : 'Wash setting'} · ${korean ? koreanName : english}`
+        // MQTT discovery does not expose Home Assistant integration translation keys. Keep the
+        // locale-specific discovery names here, while sharing stable prefixes so HA's Sensor card
+        // naturally groups current operating state separately from the selected course settings.
+        const statusName = (english: string, koreanName: string) =>
+            `${korean ? '상태' : 'Status'} · ${name(english, koreanName)}`
+        const courseName = (english: string, koreanName: string) =>
+            `${korean ? '코스' : 'Course'} · ${name(english, koreanName)}`
         this.setConfig(
             allowExtendedType({
                 ...HADevice.config(meta, { name: name('LG FX25 Washer', 'LG FX25 세탁기') }),
@@ -147,7 +152,7 @@ export default class Device extends AABBDevice {
                         platform: 'binary_sensor',
                         unique_id: '$deviceid-power',
                         state_topic: '$this/power',
-                        name: name('Power', '전원'),
+                        name: statusName('Power', '전원'),
                         icon: 'mdi:washing-machine',
                         device_class: 'running',
                     },
@@ -163,21 +168,21 @@ export default class Device extends AABBDevice {
                         platform: 'sensor',
                         unique_id: '$deviceid-status',
                         state_topic: '$this/status',
-                        name: name('Status', '현재 상태'),
+                        name: statusName('Current status', '현재 상태'),
                         icon: 'mdi:state-machine',
                     },
                     course: {
                         platform: 'sensor',
                         unique_id: '$deviceid-course',
                         state_topic: '$this/course',
-                        name: washSetting('Course', '세탁 코스'),
+                        name: courseName('Program', '코스'),
                         icon: 'mdi:pin-outline',
                     },
                     remaining_time: {
                         platform: 'sensor',
                         unique_id: '$deviceid-remaining-time',
                         state_topic: '$this/remaining_time',
-                        name: name('Remaining time', '남은 시간'),
+                        name: statusName('Remaining time', '남은 시간'),
                         device_class: 'duration',
                         unit_of_measurement: 'min',
                         icon: 'mdi:timer-outline',
@@ -186,7 +191,7 @@ export default class Device extends AABBDevice {
                         platform: 'sensor',
                         unique_id: '$deviceid-initial-time',
                         state_topic: '$this/initial_time',
-                        name: name('Initial time', '전체 시간'),
+                        name: statusName('Initial time', '전체 시간'),
                         device_class: 'duration',
                         unit_of_measurement: 'min',
                         icon: 'mdi:timer-sand',
@@ -195,7 +200,7 @@ export default class Device extends AABBDevice {
                         platform: 'sensor',
                         unique_id: '$deviceid-reserve-time',
                         state_topic: '$this/reserve_time',
-                        name: name('Reserved start time', '예약 시간'),
+                        name: courseName('Reserved start time', '예약 시간'),
                         device_class: 'duration',
                         unit_of_measurement: 'min',
                         icon: 'mdi:clock-outline',
@@ -204,21 +209,21 @@ export default class Device extends AABBDevice {
                         platform: 'sensor',
                         unique_id: '$deviceid-soil',
                         state_topic: '$this/soil',
-                        name: washSetting('Soil level', '오염도'),
+                        name: courseName('Soil level', '오염도'),
                         icon: 'mdi:liquid-spot',
                     },
                     rinse: {
                         platform: 'sensor',
                         unique_id: '$deviceid-rinse',
                         state_topic: '$this/rinse',
-                        name: washSetting('Rinse count', '헹굼 횟수'),
+                        name: courseName('Rinse count', '헹굼 횟수'),
                         icon: 'mdi:water-sync',
                     },
                     spin: {
                         platform: 'sensor',
                         unique_id: '$deviceid-spin',
                         state_topic: '$this/spin',
-                        name: washSetting('Spin speed', '탈수 세기'),
+                        name: courseName('Spin level', '탈수 세기'),
                         unit_of_measurement: 'rpm',
                         icon: 'mdi:rotate-right',
                     },
@@ -226,7 +231,7 @@ export default class Device extends AABBDevice {
                         platform: 'sensor',
                         unique_id: '$deviceid-temperature',
                         state_topic: '$this/temperature',
-                        name: washSetting('Water temperature', '물 온도'),
+                        name: courseName('Wash temperature', '세탁 온도'),
                         icon: 'mdi:thermometer',
                         value_template: "{{ value if value | is_number else 'None' }}",
                     },
@@ -234,7 +239,7 @@ export default class Device extends AABBDevice {
                         platform: 'binary_sensor',
                         unique_id: '$deviceid-door',
                         state_topic: '$this/door',
-                        name: name('Door', '문'),
+                        name: statusName('Door', '문'),
                         device_class: 'door',
                     },
                     door_lock: {
@@ -249,42 +254,42 @@ export default class Device extends AABBDevice {
                         platform: 'binary_sensor',
                         unique_id: '$deviceid-child-lock',
                         state_topic: '$this/child_lock',
-                        name: name('Child lock', '버튼 잠금'),
+                        name: statusName('Child lock', '버튼 잠금'),
                         icon: 'mdi:account-lock',
                     },
                     remote_start: {
                         platform: 'binary_sensor',
                         unique_id: '$deviceid-remote-start',
                         state_topic: '$this/remote_start',
-                        name: name('Remote start enabled', '원격 제어'),
+                        name: statusName('Remote start', '원격 제어'),
                         icon: 'mdi:remote',
                     },
                     turbo_wash: {
                         platform: 'binary_sensor',
                         unique_id: '$deviceid-turbo-wash',
                         state_topic: '$this/turbo_wash',
-                        name: washSetting('TurboWash', '터보샷'),
+                        name: courseName('TurboWash', '터보샷'),
                         icon: 'mdi:rocket-launch',
                     },
                     pre_wash: {
                         platform: 'binary_sensor',
                         unique_id: '$deviceid-pre-wash',
                         state_topic: '$this/pre_wash',
-                        name: washSetting('Pre-wash', '애벌세탁'),
+                        name: courseName('Pre-wash', '애벌세탁'),
                         icon: 'mdi:water-plus',
                     },
                     steam: {
                         platform: 'binary_sensor',
                         unique_id: '$deviceid-steam',
                         state_topic: '$this/steam',
-                        name: washSetting('Steam', '스팀'),
+                        name: courseName('Steam', '스팀'),
                         icon: 'mdi:kettle-steam',
                     },
                     crease_care: {
                         platform: 'binary_sensor',
                         unique_id: '$deviceid-crease-care',
                         state_topic: '$this/crease_care',
-                        name: washSetting('Crease care', '구김방지'),
+                        name: courseName('Crease care', '구김방지'),
                         icon: 'mdi:tshirt-crew-outline',
                     },
                     tub_clean_count: {

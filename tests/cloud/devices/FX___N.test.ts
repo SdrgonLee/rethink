@@ -83,8 +83,51 @@ describe('FX___N', () => {
         assert.equal(components.power_control.platform, 'switch')
         assert.equal(components.power_control.state_topic, '$this/power')
         assert.equal(components.power_control.command_topic, '$this/power/set')
+        assert.deepEqual(
+            Object.fromEntries(
+                [
+                    'power',
+                    'status',
+                    'remaining_time',
+                    'initial_time',
+                    'door',
+                    'child_lock',
+                    'remote_start',
+                    'course',
+                    'reserve_time',
+                    'soil',
+                    'rinse',
+                    'spin',
+                    'temperature',
+                    'turbo_wash',
+                    'pre_wash',
+                    'steam',
+                    'crease_care',
+                ].map((id) => [id, components[id].name]),
+            ),
+            {
+                power: 'Status · Power',
+                status: 'Status · Current status',
+                remaining_time: 'Status · Remaining time',
+                initial_time: 'Status · Initial time',
+                door: 'Status · Door',
+                child_lock: 'Status · Child lock',
+                remote_start: 'Status · Remote start',
+                course: 'Course · Program',
+                reserve_time: 'Course · Reserved start time',
+                soil: 'Course · Soil level',
+                rinse: 'Course · Rinse count',
+                spin: 'Course · Spin level',
+                temperature: 'Course · Wash temperature',
+                turbo_wash: 'Course · TurboWash',
+                pre_wash: 'Course · Pre-wash',
+                steam: 'Course · Steam',
+                crease_care: 'Course · Crease care',
+            },
+        )
         for (const id of [
             'course',
+            'reserve_time',
             'soil',
             'rinse',
             'spin',
@@ -94,7 +137,11 @@ describe('FX___N', () => {
             'steam',
             'crease_care',
         ]) {
-            assert.match(components[id].name as string, /^Wash setting · /, `${id} sorts with cycle settings`)
+            assert.match(components[id].name as string, /^Course · /, `${id} sorts with course settings`)
+            assert.equal(components[id].entity_category, undefined, `${id} remains in the Sensor section`)
+        }
+        for (const id of ['power', 'status', 'remaining_time', 'initial_time', 'door', 'child_lock', 'remote_start']) {
+            assert.match(components[id].name as string, /^Status · /, `${id} sorts with current status`)
             assert.equal(components[id].entity_category, undefined, `${id} remains in the Sensor section`)
         }
         for (const [id, component] of Object.entries(components)) {
@@ -114,7 +161,15 @@ describe('FX___N', () => {
         assert.deepEqual(
             Object.fromEntries(
                 [
+                    'power',
+                    'status',
+                    'remaining_time',
+                    'initial_time',
+                    'door',
+                    'child_lock',
+                    'remote_start',
                     'course',
+                    'reserve_time',
                     'soil',
                     'rinse',
                     'spin',
@@ -126,22 +181,26 @@ describe('FX___N', () => {
                 ].map((id) => [id, components[id].name]),
             ),
             {
-                course: '세탁 설정 · 세탁 코스',
-                soil: '세탁 설정 · 오염도',
-                rinse: '세탁 설정 · 헹굼 횟수',
-                spin: '세탁 설정 · 탈수 세기',
-                temperature: '세탁 설정 · 물 온도',
-                turbo_wash: '세탁 설정 · 터보샷',
-                pre_wash: '세탁 설정 · 애벌세탁',
-                steam: '세탁 설정 · 스팀',
-                crease_care: '세탁 설정 · 구김방지',
+                power: '상태 · 전원',
+                status: '상태 · 현재 상태',
+                remaining_time: '상태 · 남은 시간',
+                initial_time: '상태 · 전체 시간',
+                door: '상태 · 문',
+                child_lock: '상태 · 버튼 잠금',
+                remote_start: '상태 · 원격 제어',
+                course: '코스 · 코스',
+                reserve_time: '코스 · 예약 시간',
+                soil: '코스 · 오염도',
+                rinse: '코스 · 헹굼 횟수',
+                spin: '코스 · 탈수 세기',
+                temperature: '코스 · 세탁 온도',
+                turbo_wash: '코스 · 터보샷',
+                pre_wash: '코스 · 애벌세탁',
+                steam: '코스 · 스팀',
+                crease_care: '코스 · 구김방지',
             },
         )
-        assert.equal(components.power.name, '전원')
         assert.equal(components.power_control.name, '전원 제어')
-        assert.equal(components.status.name, '현재 상태')
-        assert.equal(components.remaining_time.name, '남은 시간')
-        assert.equal(components.door.name, '문')
         assert.equal(components.tub_clean_count.name, '사용 횟수')
         assert.equal(components.error.name, '오류')
         assert.equal(components.course.unique_id, '$deviceid-course')
