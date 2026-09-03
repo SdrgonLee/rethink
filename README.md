@@ -23,7 +23,7 @@ The following appliances are currently supported in rethink:
     - 🫤 GSB470BASZ, American Style Side by Side Refrigerator - preliminary support,
     - 🫤 GA-B509CMUM - preliminary support,
 - Washing Machines:
-    - 🫤 LG FX25 (FX___N), Front-Loading Washing Machine - preliminary read-only support,
+    - 🫤 LG FX25 (FX\_\_\_N), Front-Loading Washing Machine - preliminary read-only support,
     - 🫤 (model name unknown) Washing Machine - preliminary support
     - 👍 F2J7HG1W, Washing Machine - mostly working,
     - 🫤 F4WV508S2E, Front-Loading Washing Machine - preliminary support
@@ -84,8 +84,8 @@ Miscelanneous utilities:
 - [packet-sender](tools/packet-sender.ts) - an utility to create TLV-formatted packets & send them via MQTT to the appliance. It connects to rethink-cloud
 - [appliance simulator](tools/appliance-simulator) - a program which allows the Wi-Fi module to be operated without connection to an appliance. It simulates a minimum set of UART responses to activate the Wi-Fi module.
 - [lgcloud-monitor](tools/lgcloud-monitor.ts) - connects to the official LG cloud just like the official app would and displays real-time notifications about your devices straight from the MQTT feed. Useful for understanding how the LG cloud processes device updates.
-- [rethink-capture](tools/rethink-capture.ts) - records a device's live wire traffic (and optionally the time-aligned LG cloud notifications) to a JSONL capture file, with inline annotations, for offline reverse-engineering in an LLM-friendly format.
-- [mcp-server](tools/mcp-server.ts) - an [MCP](https://modelcontextprotocol.io) server that exposes the reverse-engineering toolkit (decode/encode packets, enumerate devices, capture device & cloud traffic, inject and probe packets) to an LLM agent.
+- [rethink-capture](tools/rethink-capture.ts) - records a device's raw wire traffic and transparent ThinQ2 application messages (and optionally the time-aligned LG cloud notifications) to a JSONL capture file, with inline annotations, for offline reverse-engineering in an LLM-friendly format.
+- [mcp-server](tools/mcp-server.ts) - an [MCP](https://modelcontextprotocol.io) server that exposes the reverse-engineering toolkit (decode/encode packets, enumerate devices, capture raw and application-level device traffic plus cloud notifications, inject and probe packets) to an LLM agent.
 
 ## Notice
 

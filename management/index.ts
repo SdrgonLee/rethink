@@ -10,6 +10,7 @@ import { Bridge } from '@/bridge'
 import { Request, Response } from 'express'
 import { Device as T1Device } from '@/cloud/thinq1/device'
 import { Device as T2Device } from '@/cloud/thinq2/device'
+import type { BridgeMessage } from '@/cloud/thinq2/bridge-message'
 
 // refresh bridged device names policy:
 // - only if a websocket subscriber is connected
@@ -272,18 +273,49 @@ export function app(ha: HA_bridge, manager: DeviceManager, bridge: Bridge | unde
                 else safeSend(ws, JSON.stringify({ tx: JSON.stringify(arg), injected: injectFlag }))
             }
 
+            const sendApplication = (direction: 'fromDevice' | 'toDevice', message: BridgeMessage) => {
+                // sourceTopic can contain account-specific upstream topic data. It is
+                // deliberately excluded from the management/capture interface.
+                safeSend(
+                    ws,
+                    JSON.stringify({
+                        application: {
+                            direction,
+                            qos: message.qos,
+                            retain: message.retain,
+                            payload: message.payload.toString('base64'),
+                        },
+                        injected: injectFlag,
+                    }),
+                )
+            }
+            const onApplicationRx = (message: BridgeMessage) => sendApplication('fromDevice', message)
+            const onApplicationTx = (message: BridgeMessage) => sendApplication('toDevice', message)
+
+            const detachDevice = (dev: AnyDevice | undefined) => {
+                dev?.removeListener('data', onDeviceRx)
+                dev?.removeListener('sendData', onDeviceTx)
+                if (dev instanceof T2Device) {
+                    dev.removeBridgeMessageListener(onApplicationRx)
+                    dev.removeBridgeSendMessageListener(onApplicationTx)
+                }
+            }
+
             const checkDevicePresence = () => {
                 const dev = manager.allDevices[id]
 
                 if (dev !== device) {
-                    device?.removeListener('data', onDeviceRx)
-                    device?.removeListener('sendData', onDeviceTx)
+                    detachDevice(device)
 
                     device = dev
                     if (device) {
                         safeSend(ws, JSON.stringify({ status: 'online', meta: device.meta }))
                         device.on('data', onDeviceRx)
                         device.on('sendData', onDeviceTx)
+                        if (device instanceof T2Device) {
+                            device.onBridgeMessage(onApplicationRx)
+                            device.onBridgeSendMessage(onApplicationTx)
+                        }
                     } else {
                         safeSend(ws, JSON.stringify({ status: 'offline' }))
                     }
@@ -340,8 +372,7 @@ export function app(ha: HA_bridge, manager: DeviceManager, bridge: Bridge | unde
 
             const cleanup = () => {
                 if (!deviceMonitors.delete(ws)) return
-                device?.removeListener('data', onDeviceRx)
-                device?.removeListener('sendData', onDeviceTx)
+                detachDevice(device)
                 device = undefined
                 manager.removeListener('newDevice', checkDevicePresence)
                 manager.removeListener('dropDevice', checkDevicePresence)

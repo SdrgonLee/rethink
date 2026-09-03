@@ -7,8 +7,8 @@
 //   read_capture                   — page through a JSONL capture file (rethink-capture.ts)
 //   cloud_start / cloud_stop       — enable/disable the live LG cloud notification feed
 //   read_cloud                     — page through buffered cloud messages (like read_capture)
-//   device_start / device_stop     — enable/disable live capture of a device's wire traffic
-//   read_device                    — page through buffered device wire packets (decoded)
+//   device_start / device_stop     — enable/disable live raw + application device capture
+//   read_device                    — page through buffered raw/application device events
 //   inject                         — send a packet via the management /device WS (gated)
 //   probe                          — sweep a field across values, inject each, observe the cloud reaction
 //
@@ -109,11 +109,11 @@ const ensureCloudFeed = () => cloudController.ensure()
 const stopCloudFeed = () => cloudController.stop()
 const cloudFeedStatus = () => cloudController.status()
 
-// ── device wire capture ─────────────────────────────────────────────────────
-// Subscribe to a device's management /device WS and buffer its wire packets (rx =
-// fromDevice, tx = toDevice), decoded like a capture file. Several devices can be
-// captured at once; read_device pages the shared buffer. The in-memory live counterpart
-// to read_capture (which reads a JSONL file on disk).
+// ── device capture ──────────────────────────────────────────────────────────
+// Subscribe to a device's management /device WS and buffer both raw wire packets and
+// transparent ThinQ2 application messages. Several devices can be captured at once;
+// read_device pages the shared buffer. This is the in-memory live counterpart to
+// read_capture (which reads a JSONL file on disk).
 
 type WireEvent = {
     seq: number
@@ -131,8 +131,23 @@ type WireEvent = {
     body?: string
 }
 
+type ApplicationEvent = {
+    seq: number
+    ts: number
+    deviceId: string
+    k: 'application'
+    dir: 'fromDevice' | 'toDevice'
+    injected: boolean
+    qos: 0 | 1 | 2
+    retain: boolean
+    encoding: 'base64'
+    payload: string
+    message?: unknown
+    text?: string
+}
+
 const DEVICE_BUFFER_MAX = 2000
-const deviceBuffer: WireEvent[] = []
+const deviceBuffer: Array<WireEvent | ApplicationEvent> = []
 let deviceSeq = 0
 
 type CaptureSocket = Pick<WebSocket, 'on' | 'close'>
@@ -148,6 +163,10 @@ export class DeviceCaptureController {
     constructor(
         private readonly createSocket: (url: string) => CaptureSocket = (url) => new WebSocket(url),
         private readonly startTimeoutMs = 5000,
+        private readonly capture = {
+            wire: pushWire,
+            application: pushApplication,
+        },
     ) {}
 
     start(host: string, deviceId: string): Promise<string> {
@@ -181,8 +200,10 @@ export class DeviceCaptureController {
                 } catch {
                     return
                 }
-                if (typeof msg.rx === 'string') pushWire(deviceId, 'fromDevice', msg.rx, !!msg.injected)
-                else if (typeof msg.tx === 'string') pushWire(deviceId, 'toDevice', msg.tx, !!msg.injected)
+                if (typeof msg.rx === 'string') this.capture.wire(deviceId, 'fromDevice', msg.rx, !!msg.injected)
+                else if (typeof msg.tx === 'string') this.capture.wire(deviceId, 'toDevice', msg.tx, !!msg.injected)
+                else if (isApplicationMessage(msg.application))
+                    this.capture.application(deviceId, msg.application, !!msg.injected)
                 else if (msg.status) entry.finish(msg.status)
             })
             socket.on('error', (err: Error) => {
@@ -238,6 +259,48 @@ function pushWire(deviceId: string, dir: 'fromDevice' | 'toDevice', hex: string,
         else event = { ...base, hex, protocol: 'unknown' }
     }
     deviceBuffer.push(event)
+    if (deviceBuffer.length > DEVICE_BUFFER_MAX) deviceBuffer.shift()
+}
+
+type ManagementApplicationMessage = {
+    direction: 'fromDevice' | 'toDevice'
+    qos: 0 | 1 | 2
+    retain: boolean
+    payload: string
+}
+
+function isApplicationMessage(value: unknown): value is ManagementApplicationMessage {
+    if (!value || typeof value !== 'object') return false
+    const message = value as Record<string, unknown>
+    return (
+        (message.direction === 'fromDevice' || message.direction === 'toDevice') &&
+        (message.qos === 0 || message.qos === 1 || message.qos === 2) &&
+        typeof message.retain === 'boolean' &&
+        typeof message.payload === 'string'
+    )
+}
+
+function pushApplication(deviceId: string, application: ManagementApplicationMessage, injected: boolean) {
+    const payload = Buffer.from(application.payload, 'base64')
+    const text = payload.toString('utf8').replace(/\0+$/, '')
+    let message: unknown
+    try {
+        message = JSON.parse(text)
+    } catch {}
+
+    deviceBuffer.push({
+        seq: deviceSeq++,
+        ts: Date.now(),
+        deviceId,
+        k: 'application',
+        dir: application.direction,
+        injected,
+        qos: application.qos,
+        retain: application.retain,
+        encoding: 'base64',
+        payload: application.payload,
+        ...(message === undefined ? { text } : { message }),
+    })
     if (deviceBuffer.length > DEVICE_BUFFER_MAX) deviceBuffer.shift()
 }
 
@@ -345,7 +408,10 @@ const tools: Record<string, { description: string; inputSchema: object; handler:
             type: 'object',
             properties: {
                 path: { type: 'string' },
-                k: { type: 'string', description: 'filter by event kind: session|wire|cloud|note|marker' },
+                k: {
+                    type: 'string',
+                    description: 'filter by event kind: session|wire|application|cloud|note|marker',
+                },
                 dir: { type: 'string', enum: ['fromDevice', 'toDevice'] },
                 injected: { type: 'boolean' },
                 cursor: { type: 'number', description: 'event index to start from (default 0)' },
@@ -431,7 +497,7 @@ const tools: Record<string, { description: string; inputSchema: object; handler:
 
     device_start: {
         description:
-            "Start capturing a device's live wire traffic (rx=fromDevice, tx=toDevice packets) from the management /device WS into the in-memory buffer, read with read_device. Each packet is decoded like a capture file. Idempotent per device; several devices can be captured at once. Returns the device status (online/offline).",
+            "Start capturing a device's raw wire traffic and transparent ThinQ2 application messages from the management /device WS into the in-memory buffer, read with read_device. Raw packets are decoded like a capture file; application payloads include exact base64 bytes and parsed JSON when possible. Idempotent per device; several devices can be captured at once. Returns the device status (online/offline).",
         inputSchema: {
             type: 'object',
             properties: {
@@ -448,7 +514,7 @@ const tools: Record<string, { description: string; inputSchema: object; handler:
 
     device_stop: {
         description:
-            'Stop capturing device wire traffic. Without deviceId, stops all captures. Pass clear:true to also drop buffered events (for the given device, or all).',
+            'Stop capturing device traffic. Without deviceId, stops all captures. Pass clear:true to also drop buffered events (for the given device, or all).',
         inputSchema: {
             type: 'object',
             properties: {
@@ -471,11 +537,12 @@ const tools: Record<string, { description: string; inputSchema: object; handler:
 
     read_device: {
         description:
-            'Read buffered device wire traffic captured by device_start (rx=fromDevice, tx=toDevice), decoded. The in-memory live counterpart to read_capture (which reads a JSONL file). Filter by deviceId, dir, injected; page via cursor/limit (opaque sequence — pass back nextCursor). Correlate with read_cloud by timestamp (ts).',
+            'Read buffered raw wire and transparent ThinQ2 application traffic captured by device_start. Application events have k=application, exact base64 payload bytes, and parsed message JSON when possible. Filter by deviceId, kind, direction, or injected state; page via cursor/limit (opaque sequence — pass back nextCursor). Correlate with read_cloud by timestamp (ts).',
         inputSchema: {
             type: 'object',
             properties: {
                 deviceId: { type: 'string' },
+                k: { type: 'string', enum: ['wire', 'application'] },
                 dir: { type: 'string', enum: ['fromDevice', 'toDevice'] },
                 injected: { type: 'boolean' },
                 cursor: {
@@ -489,6 +556,8 @@ const tools: Record<string, { description: string; inputSchema: object; handler:
             const filtered = deviceBuffer.filter(
                 (e) =>
                     (args.deviceId === undefined || e.deviceId === String(args.deviceId)) &&
+                    (args.k === undefined ||
+                        (args.k === 'application' ? 'k' in e && e.k === 'application' : !('k' in e))) &&
                     (args.dir === undefined || e.dir === args.dir) &&
                     (args.injected === undefined || e.injected === args.injected),
             )

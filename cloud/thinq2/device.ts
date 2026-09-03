@@ -30,6 +30,7 @@ export class Device extends TypedEmitter<DeviceEvents> {
     }
 
     private bridgeMessageListeners = new Set<(message: BridgeMessage) => void>()
+    private bridgeSendMessageListeners = new Set<(message: BridgeMessage) => void>()
 
     onBridgeMessage(listener: (message: BridgeMessage) => void) {
         this.bridgeMessageListeners.add(listener)
@@ -45,6 +46,24 @@ export class Device extends TypedEmitter<DeviceEvents> {
                 listener(message)
             } catch (err) {
                 console.warn('ThinQ2 bridge message listener failed', err)
+            }
+        }
+    }
+
+    onBridgeSendMessage(listener: (message: BridgeMessage) => void) {
+        this.bridgeSendMessageListeners.add(listener)
+    }
+
+    removeBridgeSendMessageListener(listener: (message: BridgeMessage) => void) {
+        this.bridgeSendMessageListeners.delete(listener)
+    }
+
+    private emitBridgeSendMessage(message: BridgeMessage) {
+        for (const listener of this.bridgeSendMessageListeners) {
+            try {
+                listener(message)
+            } catch (err) {
+                console.warn('ThinQ2 bridge send message listener failed', err)
             }
         }
     }
@@ -73,6 +92,9 @@ export class Device extends TypedEmitter<DeviceEvents> {
             },
             null,
         )
+        // Observers run only after the downstream publish. Capture/management
+        // failures must never interfere with transparent forwarding.
+        this.emitBridgeSendMessage(message)
     }
 }
 

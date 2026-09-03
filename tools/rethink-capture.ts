@@ -1,5 +1,6 @@
 // Capture recorder: subscribes to a device's management /device WebSocket, decodes
-// every packet through packet-codec, and writes a time-ordered JSONL capture.
+// every raw packet through packet-codec, captures transparent ThinQ2 application
+// messages in both directions, and writes a time-ordered JSONL capture.
 //
 // It also reads annotations from stdin: type a line while operating the appliance
 // (e.g. "turning fan to high") and it is recorded as a `note` event, time-aligned
@@ -9,8 +10,12 @@
 //   tsx tools/rethink-capture.ts [--cloud] [--state <path>] <mgmt-host[:port]> <device-uuid> [out.jsonl]
 //
 // The /device WS is served on the management port (default 44401). It emits
-//   {rx, injected} = device->cloud (fromDevice),  {tx, injected} = cloud->device (toDevice),
+//   {rx, injected} = raw device->cloud (fromDevice),
+//   {tx, injected} = raw cloud->device (toDevice),
+//   {application:{direction,qos,retain,payload},injected} = transparent ThinQ2 application payload,
 //   {status:'online'|'offline', meta}.
+// Application payload is base64 so its bytes are preserved. The account-specific
+// upstream MQTT topic is intentionally never exposed by the management endpoint.
 //
 // With --cloud the recorder also attaches to the real LG cloud's notification feed and
 // records {k:'cloud'} events on the same clock, so each fromDevice packet can be labelled
@@ -52,12 +57,12 @@ const host = hostArg.includes(':') ? hostArg : `${hostArg}:44401`
 const out = outArg ?? `capture-${deviceId}-${Date.now()}.jsonl`
 const stream = fs.createWriteStream(out, { flags: 'a' })
 
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 function emit(event: object) {
     stream.write(JSON.stringify({ ts: Date.now(), ...event }) + '\n')
 }
 
-emit({ k: 'session', v: SCHEMA_VERSION, deviceId, tool: 'rethink-capture/0.1' })
+emit({ k: 'session', v: SCHEMA_VERSION, deviceId, tool: 'rethink-capture/0.2' })
 
 // A `wire` event: decode the hex and fold the decoded view in, but keep the raw hex.
 function recordWire(dir: 'fromDevice' | 'toDevice', raw: string, injected: boolean) {
@@ -93,6 +98,44 @@ function recordWire(dir: 'fromDevice' | 'toDevice', raw: string, injected: boole
     }
 }
 
+type ApplicationEvent = {
+    direction: 'fromDevice' | 'toDevice'
+    qos: 0 | 1 | 2
+    retain: boolean
+    payload: string
+}
+
+function isApplicationEvent(value: unknown): value is ApplicationEvent {
+    if (!value || typeof value !== 'object') return false
+    const event = value as Record<string, unknown>
+    return (
+        (event.direction === 'fromDevice' || event.direction === 'toDevice') &&
+        (event.qos === 0 || event.qos === 1 || event.qos === 2) &&
+        typeof event.retain === 'boolean' &&
+        typeof event.payload === 'string'
+    )
+}
+
+function recordApplication(event: ApplicationEvent, injected: boolean) {
+    const payload = Buffer.from(event.payload, 'base64')
+    const text = payload.toString('utf8').replace(/\0+$/, '')
+    let message: unknown
+    try {
+        message = JSON.parse(text)
+    } catch {}
+
+    emit({
+        k: 'application',
+        dir: event.direction,
+        injected,
+        qos: event.qos,
+        retain: event.retain,
+        encoding: 'base64',
+        payload: event.payload,
+        ...(message === undefined ? { text } : { message }),
+    })
+}
+
 const url = `ws://${host}/device?id=${encodeURIComponent(deviceId)}`
 console.error(`Connecting to ${url}\nWriting capture to ${out}`)
 
@@ -109,6 +152,7 @@ ws.on('message', (data: WebSocket.RawData) => {
     }
     if (typeof msg.rx === 'string') recordWire('fromDevice', msg.rx, !!msg.injected)
     else if (typeof msg.tx === 'string') recordWire('toDevice', msg.tx, !!msg.injected)
+    else if (isApplicationEvent(msg.application)) recordApplication(msg.application, !!msg.injected)
     else if (msg.status) emit({ k: 'marker', phase: msg.status, meta: msg.meta })
 })
 

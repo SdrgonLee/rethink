@@ -247,10 +247,13 @@ describe('ThinQ2 cloud to device transparent forwarding', () => {
         const raw = Buffer.from(`{"did":"${DEVICE_ID}","mid":50,"cmd":"ack"}`)
         const published: Array<{ packet: PublishPacket; client: unknown }> = []
         let bridgeEvents = 0
+        const sendEvents: BridgeMessage[] = []
         device.onBridgeMessage(() => bridgeEvents++)
+        device.onBridgeSendMessage((message) => sendEvents.push(message))
         broker.on('publish', (packet, client) => published.push({ packet, client }))
 
-        device.sendBridgeMessage({ sourceTopic: CLOUD_STATE.subTopic, qos: 1, retain: true, payload: raw })
+        const message = { sourceTopic: CLOUD_STATE.subTopic, qos: 1 as const, retain: true, payload: raw }
+        device.sendBridgeMessage(message)
 
         assert.equal(published.length, 1)
         assert.equal(published[0].client, null)
@@ -259,5 +262,29 @@ describe('ThinQ2 cloud to device transparent forwarding', () => {
         assert.equal(published[0].packet.retain, false)
         assert.deepEqual(published[0].packet.payload, raw)
         assert.equal(bridgeEvents, 0)
+        assert.deepEqual(sendEvents, [message])
+    })
+
+    test('does not let a cloud-to-device capture observer break forwarding', () => {
+        const broker = new Broker()
+        const device = new Device(broker, LOCAL_TOPIC, DEVICE_ID, {
+            modelId: 'TEST_MODEL',
+            modelName: 'TEST_MODEL',
+        })
+        const published: PublishPacket[] = []
+        broker.on('publish', (packet) => published.push(packet))
+        device.onBridgeSendMessage(() => {
+            throw new Error('capture failed')
+        })
+
+        assert.doesNotThrow(() =>
+            device.sendBridgeMessage({
+                sourceTopic: CLOUD_STATE.subTopic,
+                qos: 1,
+                retain: false,
+                payload: Buffer.from(`{"did":"${DEVICE_ID}","cmd":"power_off"}`),
+            }),
+        )
+        assert.equal(published.length, 1)
     })
 })

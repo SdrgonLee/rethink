@@ -25,6 +25,31 @@ function deferred<T>(): Deferred<T> {
 }
 
 describe('MCP lifecycle controllers', () => {
+    test('device capture forwards transparent application messages to the application buffer', async () => {
+        const socket = new MockSocket()
+        const wireEvents: unknown[][] = []
+        const applicationEvents: unknown[][] = []
+        const captures = new DeviceCaptureController(() => socket as never, 5000, {
+            wire: (...args) => wireEvents.push(args),
+            application: (...args) => applicationEvents.push(args),
+        })
+        const started = captures.start('localhost', 'device-1')
+        const application = {
+            direction: 'toDevice',
+            qos: 1,
+            retain: false,
+            payload: Buffer.from('{"cmd":"remote_control"}').toString('base64'),
+        }
+
+        socket.emit('message', Buffer.from(JSON.stringify({ application, injected: false })))
+        socket.emit('message', Buffer.from(JSON.stringify({ status: 'online' })))
+
+        assert.equal(await started, 'online')
+        assert.deepEqual(applicationEvents, [['device-1', application, false]])
+        assert.deepEqual(wireEvents, [])
+        captures.stop('device-1')
+    })
+
     test('device stop/start keeps the replacement socket tracked when the old socket closes late', async () => {
         const sockets: MockSocket[] = []
         const captures = new DeviceCaptureController(() => {
