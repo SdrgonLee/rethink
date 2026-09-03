@@ -23,7 +23,7 @@ The following appliances are currently supported in rethink:
     - 🫤 GSB470BASZ, American Style Side by Side Refrigerator - preliminary support,
     - 🫤 GA-B509CMUM - preliminary support,
 - Washing Machines:
-    - 🫤 LG FX25 (FX\_\_\_N), Front-Loading Washing Machine - preliminary read-only support,
+    - 🫤 LG FX25 (FX\_\_\_N), Front-Loading Washing Machine - preliminary status support with verified power control,
     - 🫤 (model name unknown) Washing Machine - preliminary support
     - 👍 F2J7HG1W, Washing Machine - mostly working,
     - 🫤 F4WV508S2E, Front-Loading Washing Machine - preliminary support
