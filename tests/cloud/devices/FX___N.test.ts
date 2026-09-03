@@ -27,6 +27,21 @@ const COMPACT_POWER_OFF = buf(
 )
 const DOOR_CLOSED = buf('AAFF200A0018002283000101030006100B0B0110029536BB')
 const DOOR_OPEN = buf('AAFF200A0018002285000101030006100B0B0110012A3EBB')
+const CYCLE_WASHING = buf(
+    'aaff200a0098007aba000100ec008600030202062e00000000000000002700270000002e030105000000020c04000000002000009001003c000000000000040000000000000000000000000000001800000000030202062e00000000000000005400540000002e0b0305040000020c04000000002000009001003c00000000000004000000000000000000000000000000180000003b15bb',
+)
+const CYCLE_RINSING = buf(
+    'aaff200a0098007c78000100ec008600030202062e00000000000000003300540035002e0b0305040000020c04000000002000009001003c000000000000040000000000000000000000000000001800000000000002062e00000000000000003200540037002e0c0b05040000020c04000000002000009001003c00000000000004000000000000000000000000000000180000009181bb',
+)
+const CYCLE_SPINNING = buf(
+    'aaff200a0098007e64000100ec008600000001062e0000000000000000140054006d002e0c0b05040000010c04000000002000009001003c000000000000040000000000000000000000000000001800000000000000062e0000000000000000130054006d002e0e0c05040000000c04000000002000009001003c0000000000000400000000000000000000000000000018000000761ebb',
+)
+const CYCLE_COMPLETE = buf(
+    'aaff200a0098007f93000100ec008600000000062e0000000000000000010054008f002e0e0c05040000000c04000000002000009001003c000000000000040000000000000000000000000000001800000000000000002e00000000000000000100540090002e2a0e05040000000d04000000000000001001003c0000000000000400000000000000000000000000000018000000dbe6bb',
+)
+const CYCLE_LAUNDRY_CARE = buf(
+    'aa5020e6000201ff01570000000000002e00000000000000000100540091002e2f2a05040000000d04000000000000001001003c0000000000000c00000000000000000000000000000018000000d5bb',
+)
 
 function makeDevice() {
     const ha = new MockHAConnection()
@@ -64,6 +79,8 @@ describe('FX___N', () => {
             assert.ok(components[id], `${id} component present`)
             assert.equal(components[id].command_topic, undefined, `${id} remains read-only`)
         }
+        assert.equal(components.tub_clean_count.name, 'Use count')
+        assert.equal(components.tub_clean_count.entity_category, undefined)
     })
 
     test('real 0x55 resync decodes the powered-off state without a stale countdown', () => {
@@ -131,6 +148,25 @@ describe('FX___N', () => {
         assert.equal(ha.devices[DEVICE_ID].properties.door, 'OFF')
         thinq.emit('data', DOOR_OPEN)
         assert.equal(ha.devices[DEVICE_ID].properties.door, 'ON')
+    })
+
+    test('real full-cycle frames follow washing through laundry care', () => {
+        const { ha, thinq } = makeDevice()
+        const expected: Array<[Buffer, string, number, number]> = [
+            [CYCLE_WASHING, 'Washing', 84, 12],
+            [CYCLE_RINSING, 'Rinsing', 50, 12],
+            [CYCLE_SPINNING, 'Spinning', 19, 12],
+            [CYCLE_COMPLETE, 'Complete', 1, 13],
+            [CYCLE_LAUNDRY_CARE, 'Laundry care', 1, 13],
+        ]
+
+        for (const [frame, status, remaining, useCount] of expected) {
+            thinq.emit('data', frame)
+            const p = ha.devices[DEVICE_ID].properties
+            assert.equal(p.status, status)
+            assert.equal(p.remaining_time, remaining)
+            assert.equal(p.tub_clean_count, useCount)
+        }
     })
 
     test('unknown door values and malformed state frames are ignored', () => {

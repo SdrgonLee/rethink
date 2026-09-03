@@ -278,9 +278,11 @@ export default class Device extends AABBDevice {
                         platform: 'sensor',
                         unique_id: '$deviceid-tub-clean-count',
                         state_topic: '$this/tub_clean_count',
-                        name: 'Washes since tub clean',
+                        // FX___N calls this TCLCount, while LG's official HA integration exposes
+                        // the same counter as "Use count". A complete real cycle incremented both
+                        // views from 12 to 13 at the same instant.
+                        name: 'Use count',
                         icon: 'mdi:counter',
-                        entity_category: 'diagnostic',
                     },
                     error: {
                         platform: 'sensor',
@@ -298,12 +300,17 @@ export default class Device extends AABBDevice {
     processAABB(buf: Buffer) {
         if (buf[0] !== 0x20 || buf.length < 4) return
 
-        // Compact snapshots put their type at inner[1], unlike the extended 0x0A envelope. Validate
-        // the complete captured prefix because other LG protocols can also use a 0xE6 message type.
+        // Compact snapshots put their type at inner[1], unlike the extended 0x0A envelope. Power
+        // snapshots used 20E6000001FF010200, while a real laundry-care transition used
+        // 20E6000201FF015700. The subtype-specific bytes differ, so retain the shared framing bytes,
+        // exact total length and fixed block position instead of rejecting valid state variants.
         if (
             buf[1] === COMPACT_TYPE &&
             buf.length === COMPACT_HEADER_LENGTH + STATE_BLOCK_LENGTH &&
-            buf.subarray(0, COMPACT_HEADER_LENGTH).equals(Buffer.from('20E6000001FF010200', 'hex'))
+            buf[4] === 0x01 &&
+            buf[5] === 0xff &&
+            buf[6] === 0x01 &&
+            buf[8] === 0x00
         ) {
             return this.processStateBlock(buf.subarray(COMPACT_HEADER_LENGTH))
         }
