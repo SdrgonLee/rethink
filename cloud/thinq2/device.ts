@@ -213,6 +213,9 @@ export class DeviceAcceptor extends TypedEmitter<DeviceAcceptorEvents> {
             modelName: client.deployMsg.data?.appInfo?.modelName,
             swVersion: client.deployMsg.data?.appInfo?.softVer,
             deviceType: client.deployMsg.data?.appInfo?.DeviceType,
+            modelLanguage: client.deployMsg.data?.appInfo?.modelLanguage,
+            countryCode: client.deployMsg.data?.appInfo?.countryCode,
+            subCountryCode: client.deployMsg.data?.appInfo?.subCountryCode,
         }
 
         const dev = new Device(this.broker, 'lime/devices/' + deviceId, deviceId, meta)

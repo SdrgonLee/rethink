@@ -6,6 +6,7 @@ import type { Metadata } from '@/cloud/thinq'
 
 const DEVICE_ID = 'fx25-device'
 const META: Metadata = { modelId: 'FX___N', modelName: 'FX___N', swVersion: '2.11.296', deviceType: '201' }
+const KOREAN_META: Metadata = { ...META, modelLanguage: '01', countryCode: 'KR', subCountryCode: 'KR' }
 
 // Real frames from the labelled FX25 capture: powered off resync, power-on update, power-off update,
 // and door close/open events. Extended frames use 0xff in the AABB length slot; AABBDevice intentionally
@@ -43,10 +44,10 @@ const CYCLE_LAUNDRY_CARE = buf(
     'aa5020e6000201ff01570000000000002e00000000000000000100540091002e2f2a05040000000d04000000000000001001003c0000000000000c00000000000000000000000000000018000000d5bb',
 )
 
-function makeDevice() {
+function makeDevice(meta: Metadata = META) {
     const ha = new MockHAConnection()
-    const thinq = new MockThinq2Device(DEVICE_ID, META)
-    const dev = new DUT(ha.asConnection(), thinq, META)
+    const thinq = new MockThinq2Device(DEVICE_ID, meta)
+    const dev = new DUT(ha.asConnection(), thinq, meta)
     return { ha, thinq, dev }
 }
 
@@ -93,10 +94,8 @@ describe('FX___N', () => {
             'steam',
             'crease_care',
         ]) {
-            assert.equal(components[id].entity_category, 'diagnostic', `${id} is separated from primary sensors`)
-        }
-        for (const id of ['power', 'status', 'remaining_time', 'initial_time', 'reserve_time', 'door']) {
-            assert.equal(components[id].entity_category, undefined, `${id} remains a primary machine state`)
+            assert.match(components[id].name as string, /^Wash setting · /, `${id} sorts with cycle settings`)
+            assert.equal(components[id].entity_category, undefined, `${id} remains in the Sensor section`)
         }
         for (const [id, component] of Object.entries(components)) {
             if (component.platform !== 'sensor' && component.platform !== 'binary_sensor') continue
@@ -104,6 +103,50 @@ describe('FX___N', () => {
         }
         assert.equal(components.tub_clean_count.name, 'Use count')
         assert.equal(components.tub_clean_count.entity_category, undefined)
+        assert.equal(components.door_lock.entity_category, 'diagnostic')
+    })
+
+    test('uses LG Korean display names for a KR device without changing discovery identity or topics', () => {
+        const { ha } = makeDevice(KOREAN_META)
+        const config = ha.devices[DEVICE_ID].config!
+        const components = config.components as Record<string, Record<string, unknown>>
+        assert.equal(config.device.name, 'LG FX25 세탁기')
+        assert.deepEqual(
+            Object.fromEntries(
+                [
+                    'course',
+                    'soil',
+                    'rinse',
+                    'spin',
+                    'temperature',
+                    'turbo_wash',
+                    'pre_wash',
+                    'steam',
+                    'crease_care',
+                ].map((id) => [id, components[id].name]),
+            ),
+            {
+                course: '세탁 설정 · 세탁 코스',
+                soil: '세탁 설정 · 오염도',
+                rinse: '세탁 설정 · 헹굼 횟수',
+                spin: '세탁 설정 · 탈수 세기',
+                temperature: '세탁 설정 · 물 온도',
+                turbo_wash: '세탁 설정 · 터보샷',
+                pre_wash: '세탁 설정 · 애벌세탁',
+                steam: '세탁 설정 · 스팀',
+                crease_care: '세탁 설정 · 구김방지',
+            },
+        )
+        assert.equal(components.power.name, '전원')
+        assert.equal(components.power_control.name, '전원 제어')
+        assert.equal(components.status.name, '현재 상태')
+        assert.equal(components.remaining_time.name, '남은 시간')
+        assert.equal(components.door.name, '문')
+        assert.equal(components.tub_clean_count.name, '사용 횟수')
+        assert.equal(components.error.name, '오류')
+        assert.equal(components.course.unique_id, '$deviceid-course')
+        assert.equal(components.course.state_topic, '$this/course')
+        assert.equal(components.course.command_topic, undefined)
     })
 
     test('HA power writes reproduce both official ThinQ command frames byte-for-byte', () => {

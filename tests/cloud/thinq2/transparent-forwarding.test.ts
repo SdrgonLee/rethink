@@ -20,7 +20,15 @@ const DEPLOY_MESSAGE = {
     kind: 'TEST_MODEL',
     cmd: 'deploy',
     type: 0,
-    data: { appInfo: { modelName: 'TEST_MODEL', DeviceType: '201' } },
+    data: {
+        appInfo: {
+            modelName: 'TEST_MODEL',
+            DeviceType: '201',
+            modelLanguage: '01',
+            countryCode: 'KR',
+            subCountryCode: 'KR',
+        },
+    },
 } as ClipDeployMessage
 
 type LocalClient = {
@@ -93,6 +101,24 @@ function cloudHarness() {
 }
 
 describe('ThinQ2 device to cloud transparent forwarding', () => {
+    test('preserves locale metadata from provisioning for Home Assistant display names', () => {
+        const broker = new Broker()
+        const acceptor = new DeviceAcceptor(broker)
+        const client = { deviceObj: undefined, deployMsg: DEPLOY_MESSAGE }
+        let provisioned: Device | undefined
+        acceptor.on('newDevice', (device) => (provisioned = device))
+
+        acceptor.completeProvisioning(
+            DEVICE_ID,
+            { did: DEVICE_ID, mid: 2, cmd: 'completeProvisioning_ack', type: 1, data: null },
+            client as never,
+        )
+
+        assert.equal(provisioned?.meta.modelLanguage, '01')
+        assert.equal(provisioned?.meta.countryCode, 'KR')
+        assert.equal(provisioned?.meta.subCountryCode, 'KR')
+    })
+
     test('preserves device_packet bytes while independently decoding data for HA', () => {
         const h = localHarness()
         const raw = Buffer.concat([

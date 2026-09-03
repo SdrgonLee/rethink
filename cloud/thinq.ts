@@ -3,4 +3,7 @@ export type Metadata = {
     modelName: string
     deviceType?: string
     swVersion?: string
+    modelLanguage?: string
+    countryCode?: string
+    subCountryCode?: string
 }
