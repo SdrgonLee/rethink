@@ -14,8 +14,9 @@ import { allowExtendedType } from '@/util/casting'
 //   0xE6  compact state snapshot: 9-byte header + one 67-byte state block
 //   0x18  door event: inner[18] is 1=open, 2=closed
 //
-// Offsets were established from a labelled power/door capture and checked against FX___N ModelJSON.
-// This handler is intentionally read-only: no command frames have been captured and verified yet.
+// Offsets were established from labelled power/door and full-cycle captures and checked against FX___N
+// ModelJSON. Power control is the only writable feature: ON and OFF were each reproduced twice through
+// the official ThinQ app. All cycle, option, start and pause entities remain intentionally read-only.
 
 const HEADER_LENGTH = 13
 const COMPACT_HEADER_LENGTH = 9
@@ -145,6 +146,14 @@ export default class Device extends AABBDevice {
                         name: 'Power',
                         icon: 'mdi:washing-machine',
                         device_class: 'running',
+                    },
+                    power_control: {
+                        platform: 'switch',
+                        unique_id: '$deviceid-power-control',
+                        state_topic: '$this/power',
+                        command_topic: '$this/power/set',
+                        name: 'Power control',
+                        icon: 'mdi:power',
                     },
                     status: {
                         platform: 'sensor',
@@ -337,6 +346,15 @@ export default class Device extends AABBDevice {
             const current = HEADER_LENGTH + STATE_BLOCK_LENGTH
             return this.processStateBlock(buf.subarray(current, current + STATE_BLOCK_LENGTH))
         }
+    }
+
+    setProperty(prop: string, mqttValue: string) {
+        if (prop !== 'power') return
+
+        // Captured twice in each direction from the official ThinQ app. The final
+        // byte is the requested state; AABBDevice supplies the outer checksum.
+        if (mqttValue === 'ON') this.send(Buffer.from('F0E5000201FF010201', 'hex'))
+        else if (mqttValue === 'OFF') this.send(Buffer.from('F0E5000201FF010200', 'hex'))
     }
 
     private processDoor(buf: Buffer) {

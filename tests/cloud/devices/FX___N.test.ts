@@ -51,7 +51,7 @@ function makeDevice() {
 }
 
 describe('FX___N', () => {
-    test('publishes read-only Home Assistant discovery entities', () => {
+    test('publishes read-only status entities plus the isolated power control', () => {
         const { ha } = makeDevice()
         const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
         for (const id of [
@@ -79,8 +79,30 @@ describe('FX___N', () => {
             assert.ok(components[id], `${id} component present`)
             assert.equal(components[id].command_topic, undefined, `${id} remains read-only`)
         }
+        assert.equal(components.power_control.platform, 'switch')
+        assert.equal(components.power_control.state_topic, '$this/power')
+        assert.equal(components.power_control.command_topic, '$this/power/set')
         assert.equal(components.tub_clean_count.name, 'Use count')
         assert.equal(components.tub_clean_count.entity_category, undefined)
+    })
+
+    test('HA power writes reproduce both official ThinQ command frames byte-for-byte', () => {
+        const { thinq, dev } = makeDevice()
+
+        dev.setProperty('power', 'ON')
+        dev.setProperty('power', 'OFF')
+
+        assert.deepEqual(thinq.outbox, [buf('AA0DF0E5000201FF010201C7BB'), buf('AA0DF0E5000201FF010200C4BB')])
+    })
+
+    test('power control rejects unknown values and does not expose other writes', () => {
+        const { thinq, dev } = makeDevice()
+
+        dev.setProperty('power', 'TOGGLE')
+        dev.setProperty('course', 'Speed Wash')
+        dev.setProperty('start', 'PRESS')
+
+        assert.deepEqual(thinq.outbox, [])
     })
 
     test('real 0x55 resync decodes the powered-off state without a stale countdown', () => {
