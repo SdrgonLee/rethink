@@ -82,6 +82,22 @@ describe('FX___N', () => {
         assert.equal(components.power_control.platform, 'switch')
         assert.equal(components.power_control.state_topic, '$this/power')
         assert.equal(components.power_control.command_topic, '$this/power/set')
+        for (const id of [
+            'course',
+            'soil',
+            'rinse',
+            'spin',
+            'temperature',
+            'turbo_wash',
+            'pre_wash',
+            'steam',
+            'crease_care',
+        ]) {
+            assert.equal(components[id].entity_category, 'config', `${id} is grouped as a cycle setting`)
+        }
+        for (const id of ['power', 'status', 'remaining_time', 'initial_time', 'reserve_time', 'door']) {
+            assert.equal(components[id].entity_category, undefined, `${id} remains a primary machine state`)
+        }
         assert.equal(components.tub_clean_count.name, 'Use count')
         assert.equal(components.tub_clean_count.entity_category, undefined)
     })

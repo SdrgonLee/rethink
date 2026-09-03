@@ -168,6 +168,7 @@ export default class Device extends AABBDevice {
                         state_topic: '$this/course',
                         name: 'Course',
                         icon: 'mdi:pin-outline',
+                        entity_category: 'config',
                     },
                     remaining_time: {
                         platform: 'sensor',
@@ -202,6 +203,7 @@ export default class Device extends AABBDevice {
                         state_topic: '$this/soil',
                         name: 'Soil level',
                         icon: 'mdi:liquid-spot',
+                        entity_category: 'config',
                     },
                     rinse: {
                         platform: 'sensor',
@@ -209,6 +211,7 @@ export default class Device extends AABBDevice {
                         state_topic: '$this/rinse',
                         name: 'Rinse count',
                         icon: 'mdi:water-sync',
+                        entity_category: 'config',
                     },
                     spin: {
                         platform: 'sensor',
@@ -217,6 +220,7 @@ export default class Device extends AABBDevice {
                         name: 'Spin',
                         unit_of_measurement: 'rpm',
                         icon: 'mdi:rotate-right',
+                        entity_category: 'config',
                     },
                     temperature: {
                         platform: 'sensor',
@@ -225,6 +229,7 @@ export default class Device extends AABBDevice {
                         name: 'Temperature',
                         icon: 'mdi:thermometer',
                         value_template: "{{ value if value | is_number else 'None' }}",
+                        entity_category: 'config',
                     },
                     door: {
                         platform: 'binary_sensor',
@@ -261,6 +266,7 @@ export default class Device extends AABBDevice {
                         state_topic: '$this/turbo_wash',
                         name: 'TurboWash',
                         icon: 'mdi:rocket-launch',
+                        entity_category: 'config',
                     },
                     pre_wash: {
                         platform: 'binary_sensor',
@@ -268,6 +274,7 @@ export default class Device extends AABBDevice {
                         state_topic: '$this/pre_wash',
                         name: 'Pre-wash',
                         icon: 'mdi:water-plus',
+                        entity_category: 'config',
                     },
                     steam: {
                         platform: 'binary_sensor',
@@ -275,6 +282,7 @@ export default class Device extends AABBDevice {
                         state_topic: '$this/steam',
                         name: 'Steam',
                         icon: 'mdi:kettle-steam',
+                        entity_category: 'config',
                     },
                     crease_care: {
                         platform: 'binary_sensor',
@@ -282,6 +290,7 @@ export default class Device extends AABBDevice {
                         state_topic: '$this/crease_care',
                         name: 'Crease care',
                         icon: 'mdi:tshirt-crew-outline',
+                        entity_category: 'config',
                     },
                     tub_clean_count: {
                         platform: 'sensor',
