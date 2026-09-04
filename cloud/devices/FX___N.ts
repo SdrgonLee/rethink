@@ -29,7 +29,7 @@ const DOOR_TYPE = 0x18
 const DOOR_OFFSET = 18
 
 type LocalOption = { code: number; en: string; ko: string; writable?: false }
-type CycleSetting = 'soil' | 'rinse' | 'spin' | 'temperature' | 'turbo'
+type CycleSetting = 'soil' | 'rinse' | 'spin' | 'temperature' | 'turbo' | 'reserve'
 type PendingSettings = {
     course?: number
     soil?: number
@@ -37,6 +37,7 @@ type PendingSettings = {
     spin?: number
     temperature?: number
     turbo?: number
+    reserve?: number
 }
 
 const COURSE_OPTIONS: LocalOption[] = [
@@ -54,14 +55,14 @@ const COURSE_OPTIONS: LocalOption[] = [
 ]
 
 // Only values reproduced through the official app are offered as writable options. Some additional
-// raw state values exist (for example Pre-wash/Soaking soil states), but they were not sent in the
-// labelled capture and therefore stay read-only.
+// raw state values exist (for example Soaking), but they were not sent in a labelled capture and
+// therefore stay read-only.
 const SOIL_OPTIONS: LocalOption[] = [
     { code: 0x00, en: 'No wash', ko: '세탁 안 함', writable: false },
     { code: 0x01, en: 'Light', ko: '적은때' },
     { code: 0x03, en: 'Normal', ko: '표준' },
     { code: 0x05, en: 'Heavy', ko: '강력' },
-    { code: 0x06, en: 'Pre-wash', ko: '애벌세탁', writable: false },
+    { code: 0x06, en: 'Pre-wash', ko: '애벌세탁' },
     { code: 0x07, en: 'Soaking', ko: '불림', writable: false },
 ]
 const RINSE_OPTIONS: LocalOption[] = [
@@ -92,6 +93,19 @@ const TURBO_OPTIONS: LocalOption[] = [
     { code: 0x00, en: 'Off', ko: '꺼짐' },
     { code: 0x01, en: 'On', ko: '켜짐' },
 ]
+const RESERVE_OPTIONS: LocalOption[] = [
+    { code: 0, en: 'Off', ko: '예약 안 함' },
+    ...Array.from({ length: 33 }, (_, index) => {
+        const minutes = 180 + index * 30
+        const hours = Math.floor(minutes / 60)
+        const remainingMinutes = minutes % 60
+        return {
+            code: minutes,
+            en: remainingMinutes === 0 ? `Finish in ${hours} hours` : `Finish in ${hours} hours 30 minutes`,
+            ko: remainingMinutes === 0 ? `${hours}시간 뒤 완료` : `${hours}시간 30분 뒤 완료`,
+        }
+    }),
+]
 
 const SETTING_OPTIONS: Record<CycleSetting, LocalOption[]> = {
     soil: SOIL_OPTIONS,
@@ -99,6 +113,7 @@ const SETTING_OPTIONS: Record<CycleSetting, LocalOption[]> = {
     spin: SPIN_OPTIONS,
     temperature: TEMPERATURE_OPTIONS,
     turbo: TURBO_OPTIONS,
+    reserve: RESERVE_OPTIONS,
 }
 
 const CONTROL_PROPERTY: Record<CycleSetting, string> = {
@@ -107,6 +122,7 @@ const CONTROL_PROPERTY: Record<CycleSetting, string> = {
     spin: 'spin_control',
     temperature: 'temperature_control',
     turbo: 'turbo_wash_control',
+    reserve: 'reserve_time_control',
 }
 const CYCLE_SETTINGS = Object.keys(CONTROL_PROPERTY) as CycleSetting[]
 
@@ -309,6 +325,16 @@ export default class Device extends AABBDevice {
                         unit_of_measurement: 'min',
                         icon: 'mdi:clock-outline',
                     },
+                    reserve_time_control: {
+                        platform: 'select',
+                        unique_id: '$deviceid-reserve-time-control',
+                        state_topic: '$this/reserve_time_control',
+                        command_topic: '$this/reserve_time_control/set',
+                        name: courseName('Reserved completion', '예약 완료'),
+                        options: options(RESERVE_OPTIONS),
+                        optimistic: false,
+                        icon: 'mdi:clock-outline',
+                    },
                     door: {
                         platform: 'binary_sensor',
                         unique_id: '$deviceid-door',
@@ -337,20 +363,6 @@ export default class Device extends AABBDevice {
                         state_topic: '$this/remote_start',
                         name: statusName('Remote start', '원격 제어'),
                         icon: 'mdi:remote',
-                    },
-                    pre_wash: {
-                        platform: 'binary_sensor',
-                        unique_id: '$deviceid-pre-wash',
-                        state_topic: '$this/pre_wash',
-                        name: courseName('Pre-wash', '애벌세탁'),
-                        icon: 'mdi:water-plus',
-                    },
-                    steam: {
-                        platform: 'binary_sensor',
-                        unique_id: '$deviceid-steam',
-                        state_topic: '$this/steam',
-                        name: courseName('Steam', '스팀'),
-                        icon: 'mdi:kettle-steam',
                     },
                     crease_care: {
                         platform: 'binary_sensor',
@@ -387,6 +399,8 @@ export default class Device extends AABBDevice {
                 temperature: { platform: 'sensor' },
                 turbo_wash: { platform: 'binary_sensor' },
                 apply_cycle_settings: { platform: 'button' },
+                pre_wash: { platform: 'binary_sensor' },
+                steam: { platform: 'binary_sensor' },
             },
         )
     }
@@ -498,13 +512,18 @@ export default class Device extends AABBDevice {
 
     private sendSettings(settings: PendingSettings) {
         if (
-            ![settings.soil, settings.rinse, settings.spin, settings.temperature, settings.turbo].every(
-                (value) => value !== undefined,
-            )
+            ![
+                settings.soil,
+                settings.rinse,
+                settings.spin,
+                settings.temperature,
+                settings.turbo,
+                settings.reserve,
+            ].every((value) => value !== undefined)
         )
             return
 
-        const { soil, rinse, spin, temperature, turbo } = settings
+        const { soil, rinse, spin, temperature, turbo, reserve } = settings
         this.send(
             Buffer.from([
                 0xf0,
@@ -529,8 +548,8 @@ export default class Device extends AABBDevice {
                 0x43,
                 0x00,
                 0x7f,
-                0x00,
-                0x00,
+                (reserve! >> 8) & 0xff,
+                reserve! & 0xff,
             ]),
         )
     }
@@ -551,13 +570,16 @@ export default class Device extends AABBDevice {
         this.publishProperty('status', STATUS[state] ?? 'Running')
         this.publishProperty('remaining_time', isOff ? 0 : minutes(block, 13))
         this.publishProperty('initial_time', isOff ? 0 : minutes(block, 15))
-        this.publishProperty('reserve_time', isOff ? 0 : minutes(block, 11))
+        const reserve = isOff ? 0 : minutes(block, 11)
+        this.publishProperty('reserve_time', reserve)
+        // The existing duration sensor remains the live countdown. The control select only updates
+        // for values the app can configure (0 or 3h..19h in 30-minute steps), so a 179-minute
+        // countdown does not replace its last confirmed "Finish in 3 hours" selection.
+        if (isOff) this.publishActualSetting('reserve', 0)
         this.publishProperty('error', ERROR[block[19]] ?? `Unknown (${block[19]})`)
         this.publishProperty('tub_clean_count', block[28])
 
         const turbo = (block[34] & 0x20) !== 0 ? 1 : 0
-        this.publishProperty('pre_wash', (block[34] & 0x40) !== 0 ? 'ON' : 'OFF')
-        this.publishProperty('steam', (block[35] & 0x10) !== 0 ? 'ON' : 'OFF')
         this.publishProperty('crease_care', (block[36] & 0x80) !== 0 ? 'ON' : 'OFF')
         this.publishProperty('child_lock', (block[37] & 0x20) !== 0 ? 'ON' : 'OFF')
         this.publishProperty('remote_start', (block[37] & 0x10) !== 0 ? 'ON' : 'OFF')
@@ -574,6 +596,7 @@ export default class Device extends AABBDevice {
             rinse: block[3],
             spin: block[4],
             turbo,
+            reserve,
         }
         this.pending = {}
 

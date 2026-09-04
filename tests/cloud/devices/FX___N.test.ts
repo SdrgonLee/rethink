@@ -52,6 +52,18 @@ const RINSE_ONE = buf(
 const SETTINGS_RESPONSE = buf(
     'AA5E20E6000201FF081E00200021001F0035003E1143117F1100010802012E00000000000000002600260001002E010005000000020D040000000000000000000038000000000000040000000000000000000000000000001800000075BB',
 )
+const PREWASH_RESPONSE = buf(
+    'AA5E20E6000201FF081E00201121111F1135113E1143117F1100060302062E00000000000000003200320000002E010005000000020D0400000000200000000000380000000000000400000000000000000000000000000018000000F5BB',
+)
+const RESERVE_THREE_HOURS_RESPONSE = buf(
+    'AA5E20E6000201FF081E11201121111F1135113E1143117F0000030302062E000000000000B4002300230000002E010005000000020D0400000000200000000080380000000000000400000000000000000000000000000018000000E6BB',
+)
+const RESERVE_FOUR_AND_HALF_HOURS_RESPONSE = buf(
+    'AA5E20E6000201FF081E11201121111F1135113E1143117F0000030302062E0000000000010E002300230000002E010005000000020D04000000002000000000803800000000000004000000000000000000000000000000180000005BBB',
+)
+const RESERVE_OFF_RESPONSE = buf(
+    'AA5E20E6000201FF081E11201121111F1135113E1143117F0000030302062E00000000000000002300230001002E010005000000020D0400000000200000000000380000000000000400000000000000000000000000000018000000D5BB',
+)
 
 function makeDevice(meta: Metadata = META) {
     const ha = new MockHAConnection()
@@ -74,8 +86,6 @@ describe('FX___N', () => {
             'door_lock',
             'child_lock',
             'remote_start',
-            'pre_wash',
-            'steam',
             'crease_care',
             'tub_clean_count',
             'error',
@@ -93,6 +103,7 @@ describe('FX___N', () => {
             'spin_control',
             'temperature_control',
             'turbo_wash_control',
+            'reserve_time_control',
         ]) {
             assert.equal(components[id].platform, 'select', `${id} is the single course value entity`)
             assert.equal(components[id].state_topic, `$this/${id}`)
@@ -113,13 +124,12 @@ describe('FX___N', () => {
                     'remote_start',
                     'course_control',
                     'reserve_time',
+                    'reserve_time_control',
                     'soil_control',
                     'rinse_control',
                     'spin_control',
                     'temperature_control',
                     'turbo_wash_control',
-                    'pre_wash',
-                    'steam',
                     'crease_care',
                 ].map((id) => [id, components[id].name]),
             ),
@@ -133,26 +143,24 @@ describe('FX___N', () => {
                 remote_start: 'Status · Remote start',
                 course_control: 'Course · Program',
                 reserve_time: 'Course · Reserved start time',
+                reserve_time_control: 'Course · Reserved completion',
                 soil_control: 'Course · Soil level',
                 rinse_control: 'Course · Rinse count',
                 spin_control: 'Course · Spin level',
                 temperature_control: 'Course · Wash temperature',
                 turbo_wash_control: 'Course · TurboWash',
-                pre_wash: 'Course · Pre-wash',
-                steam: 'Course · Steam',
                 crease_care: 'Course · Crease care',
             },
         )
         for (const id of [
             'course_control',
             'reserve_time',
+            'reserve_time_control',
             'soil_control',
             'rinse_control',
             'spin_control',
             'temperature_control',
             'turbo_wash_control',
-            'pre_wash',
-            'steam',
             'crease_care',
         ]) {
             assert.match(components[id].name as string, /^Course · /, `${id} sorts with course settings`)
@@ -188,13 +196,12 @@ describe('FX___N', () => {
                     'remote_start',
                     'course_control',
                     'reserve_time',
+                    'reserve_time_control',
                     'soil_control',
                     'rinse_control',
                     'spin_control',
                     'temperature_control',
                     'turbo_wash_control',
-                    'pre_wash',
-                    'steam',
                     'crease_care',
                 ].map((id) => [id, components[id].name]),
             ),
@@ -208,13 +215,12 @@ describe('FX___N', () => {
                 remote_start: '상태 · 원격 제어',
                 course_control: '코스 · 코스',
                 reserve_time: '코스 · 예약 시간',
+                reserve_time_control: '코스 · 예약 완료',
                 soil_control: '코스 · 오염도',
                 rinse_control: '코스 · 헹굼 횟수',
                 spin_control: '코스 · 탈수 세기',
                 temperature_control: '코스 · 세탁 온도',
                 turbo_wash_control: '코스 · 터보샷',
-                pre_wash: '코스 · 애벌세탁',
-                steam: '코스 · 스팀',
                 crease_care: '코스 · 구김방지',
             },
         )
@@ -229,6 +235,19 @@ describe('FX___N', () => {
         assert.deepEqual(components.spin_control.options, ['꺼짐', '섬세', '약', '중', '강', '건조 맞춤'])
         assert.deepEqual(components.temperature_control.options, ['물온도 없음', '냉수', '30℃', '40℃', '60℃', '95℃'])
         assert.deepEqual(components.turbo_wash_control.options, ['꺼짐', '켜짐'])
+        assert.equal(components.reserve_time.platform, 'sensor')
+        assert.equal(components.reserve_time.unique_id, '$deviceid-reserve-time')
+        assert.equal(components.reserve_time.device_class, 'duration')
+        assert.equal(components.reserve_time.unit_of_measurement, 'min')
+        assert.equal(components.reserve_time_control.platform, 'select')
+        assert.equal(components.reserve_time_control.unique_id, '$deviceid-reserve-time-control')
+        assert.equal(components.reserve_time_control.state_topic, '$this/reserve_time_control')
+        assert.equal(components.reserve_time_control.command_topic, '$this/reserve_time_control/set')
+        assert.equal(components.reserve_time_control.optimistic, false)
+        assert.equal((components.reserve_time_control.options as string[])[0], '예약 안 함')
+        assert.equal((components.reserve_time_control.options as string[])[1], '3시간 뒤 완료')
+        const reserveOptions = components.reserve_time_control.options as string[]
+        assert.equal(reserveOptions[reserveOptions.length - 1], '19시간 뒤 완료')
     })
 
     test('publishes platform-only removal updates before omitting legacy duplicate entities', () => {
@@ -239,8 +258,22 @@ describe('FX___N', () => {
         assert.deepEqual(migration.course, { platform: 'sensor' })
         assert.deepEqual(migration.turbo_wash, { platform: 'binary_sensor' })
         assert.deepEqual(migration.apply_cycle_settings, { platform: 'button' })
-        for (const id of ['course', 'soil', 'rinse', 'spin', 'temperature', 'turbo_wash', 'apply_cycle_settings'])
+        assert.deepEqual(migration.pre_wash, { platform: 'binary_sensor' })
+        assert.deepEqual(migration.steam, { platform: 'binary_sensor' })
+        for (const id of [
+            'course',
+            'soil',
+            'rinse',
+            'spin',
+            'temperature',
+            'turbo_wash',
+            'apply_cycle_settings',
+            'pre_wash',
+            'steam',
+        ])
             assert.equal(final[id], undefined)
+        assert.equal(final.reserve_time.platform, 'sensor')
+        assert.equal(final.reserve_time_control.platform, 'select')
     })
 
     test('HA power writes reproduce both official ThinQ command frames byte-for-byte', () => {
@@ -258,7 +291,7 @@ describe('FX___N', () => {
         dev.setProperty('power', 'TOGGLE')
         dev.setProperty('course_control', 'Not a course')
         dev.setProperty('soil_control', 'Extreme')
-        dev.setProperty('soil_control', '애벌세탁') // reported-only option, not validated for writes
+        dev.setProperty('soil_control', '애벌세탁')
         dev.setProperty('start', 'PRESS')
 
         assert.deepEqual(thinq.outbox, [])
@@ -269,7 +302,6 @@ describe('FX___N', () => {
         thinq.emit('data', POWER_ON)
         thinq.resetRecorder()
 
-        dev.setProperty('soil_control', '애벌세탁')
         dev.setProperty('rinse_control', '4회')
         dev.setProperty('temperature_control', '95℃')
         assert.deepEqual(
@@ -334,6 +366,65 @@ describe('FX___N', () => {
         assert.equal(p.spin_control, '섬세')
         assert.equal(p.temperature_control, '냉수')
         assert.equal(p.turbo_wash_control, '꺼짐')
+    })
+
+    test('captured pre-wash command is writable through soil and waits for the appliance response', () => {
+        const { ha, thinq, dev } = makeDevice(KOREAN_META)
+        thinq.emit('data', POWER_ON)
+        thinq.resetRecorder()
+
+        dev.setProperty('soil_control', '애벌세탁')
+        assert.equal(ha.devices[DEVICE_ID].properties.soil_control, '표준', 'commanded state is not published')
+        assert.deepEqual(thinq.outbox, [buf('AA1CF0E5000201FF081E06200221061F0335013E0043007F00003FBB')])
+
+        thinq.emit('data', PREWASH_RESPONSE)
+        assert.equal(ha.devices[DEVICE_ID].properties.soil_control, '애벌세탁')
+    })
+
+    test('captured reserve commands use big-endian minutes and reported state remains authoritative', () => {
+        const { ha, thinq, dev } = makeDevice(KOREAN_META)
+        thinq.emit('data', POWER_ON)
+        thinq.resetRecorder()
+        assert.equal(ha.devices[DEVICE_ID].properties.reserve_time, 0)
+        assert.equal(ha.devices[DEVICE_ID].properties.reserve_time_control, '예약 안 함')
+
+        dev.setProperty('reserve_time_control', '3시간 뒤 완료')
+        assert.equal(
+            ha.devices[DEVICE_ID].properties.reserve_time_control,
+            '예약 안 함',
+            'commanded state is not published',
+        )
+        assert.deepEqual(thinq.outbox, [buf('AA1CF0E5000201FF081E03200221061F0335013E0043007F00B44EBB')])
+        thinq.emit('data', RESERVE_THREE_HOURS_RESPONSE)
+        assert.equal(ha.devices[DEVICE_ID].properties.reserve_time, 180)
+        assert.equal(ha.devices[DEVICE_ID].properties.reserve_time_control, '3시간 뒤 완료')
+
+        const countdown = Buffer.from(RESERVE_THREE_HOURS_RESPONSE)
+        countdown[36] = 0
+        countdown[37] = 179
+        thinq.emit('data', countdown)
+        assert.equal(ha.devices[DEVICE_ID].properties.reserve_time, 179)
+        assert.equal(
+            ha.devices[DEVICE_ID].properties.reserve_time_control,
+            '3시간 뒤 완료',
+            'the live countdown does not become an invalid select option',
+        )
+
+        thinq.resetRecorder()
+        dev.setProperty('reserve_time_control', '4시간 30분 뒤 완료')
+        assert.equal(ha.devices[DEVICE_ID].properties.reserve_time_control, '3시간 뒤 완료')
+        assert.deepEqual(thinq.outbox, [buf('AA1CF0E5000201FF081E03200221061F0335013E0043007F010E23BB')])
+        thinq.emit('data', RESERVE_FOUR_AND_HALF_HOURS_RESPONSE)
+        assert.equal(ha.devices[DEVICE_ID].properties.reserve_time, 270)
+        assert.equal(ha.devices[DEVICE_ID].properties.reserve_time_control, '4시간 30분 뒤 완료')
+
+        thinq.resetRecorder()
+        dev.setProperty('reserve_time_control', '예약 안 함')
+        assert.equal(ha.devices[DEVICE_ID].properties.reserve_time_control, '4시간 30분 뒤 완료')
+        assert.deepEqual(thinq.outbox, [buf('AA1CF0E5000201FF081E03200221061F0335013E0043007F000032BB')])
+        thinq.emit('data', RESERVE_OFF_RESPONSE)
+        assert.equal(ha.devices[DEVICE_ID].properties.reserve_time, 0)
+        assert.equal(ha.devices[DEVICE_ID].properties.reserve_time_control, '예약 안 함')
     })
 
     test('a select command sends immediately but keeps the reported value until the appliance confirms it', () => {
