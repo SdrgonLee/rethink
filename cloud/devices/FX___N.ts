@@ -20,6 +20,7 @@ import { allowExtendedType } from '@/util/casting'
 
 const HEADER_LENGTH = 13
 const COMPACT_HEADER_LENGTH = 9
+const SETTINGS_RESPONSE_HEADER_LENGTH = 23
 const STATE_BLOCK_LENGTH = 67
 const RESYNC_TYPE = 0x55
 const UPDATE_TYPE = 0x98
@@ -27,48 +28,7 @@ const COMPACT_TYPE = 0xe6
 const DOOR_TYPE = 0x18
 const DOOR_OFFSET = 18
 
-const SOIL: Record<number, string> = {
-    0: 'None',
-    1: 'Light',
-    3: 'Normal',
-    5: 'Heavy',
-    6: 'Pre-wash',
-    7: 'Soaking',
-}
-
-const SPIN: Record<number, number> = {
-    0: 0,
-    1: 400,
-    2: 600,
-    4: 800,
-    6: 1000,
-    8: 1200,
-}
-
-const TEMPERATURE: Record<number, string | number> = {
-    0: 'unknown',
-    2: 30,
-    3: 40,
-    5: 60,
-    6: 95,
-    8: 'Cold',
-}
-
-const COURSE: Record<number, string> = {
-    0x08: 'Baby Care',
-    0x1b: 'Duvet',
-    0x2e: 'Normal',
-    0x37: 'Rinse + Spin',
-    0x4a: 'Speed Wash',
-    0x4c: 'Speed Boil',
-    0x4e: 'Spin Only',
-    0x55: 'Tub Clean',
-    0x5e: 'Wool',
-    0x72: 'AI Wash',
-    0x88: 'Microplastic Care',
-}
-
-type LocalOption = { code: number; en: string; ko: string }
+type LocalOption = { code: number; en: string; ko: string; writable?: false }
 type CycleSetting = 'soil' | 'rinse' | 'spin' | 'temperature' | 'turbo'
 type PendingSettings = {
     course?: number
@@ -97,14 +57,20 @@ const COURSE_OPTIONS: LocalOption[] = [
 // raw state values exist (for example Pre-wash/Soaking soil states), but they were not sent in the
 // labelled capture and therefore stay read-only.
 const SOIL_OPTIONS: LocalOption[] = [
+    { code: 0x00, en: 'No wash', ko: '세탁 안 함', writable: false },
     { code: 0x01, en: 'Light', ko: '적은때' },
     { code: 0x03, en: 'Normal', ko: '표준' },
     { code: 0x05, en: 'Heavy', ko: '강력' },
+    { code: 0x06, en: 'Pre-wash', ko: '애벌세탁', writable: false },
+    { code: 0x07, en: 'Soaking', ko: '불림', writable: false },
 ]
 const RINSE_OPTIONS: LocalOption[] = [
+    { code: 0x00, en: 'No rinse', ko: '헹굼 안 함', writable: false },
     { code: 0x01, en: '1 rinse', ko: '1회' },
     { code: 0x02, en: '2 rinses', ko: '2회' },
     { code: 0x03, en: '3 rinses', ko: '3회' },
+    { code: 0x04, en: '4 rinses', ko: '4회', writable: false },
+    { code: 0x05, en: '5 rinses', ko: '5회', writable: false },
 ]
 const SPIN_OPTIONS: LocalOption[] = [
     { code: 0x00, en: 'Off', ko: '꺼짐' },
@@ -115,10 +81,12 @@ const SPIN_OPTIONS: LocalOption[] = [
     { code: 0x08, en: 'Dry matching', ko: '건조 맞춤' },
 ]
 const TEMPERATURE_OPTIONS: LocalOption[] = [
+    { code: 0x00, en: 'No temperature', ko: '물온도 없음', writable: false },
     { code: 0x08, en: 'Cold', ko: '냉수' },
     { code: 0x02, en: '30 °C', ko: '30℃' },
     { code: 0x03, en: '40 °C', ko: '40℃' },
     { code: 0x05, en: '60 °C', ko: '60℃' },
+    { code: 0x06, en: '95 °C', ko: '95℃', writable: false },
 ]
 const TURBO_OPTIONS: LocalOption[] = [
     { code: 0x00, en: 'Off', ko: '꺼짐' },
@@ -209,11 +177,8 @@ function minutes(block: Buffer, offset: number): number {
 export default class Device extends AABBDevice {
     private readonly korean: boolean
     private poweredOn = false
-    private currentCourse: number | undefined
+    private actual: PendingSettings = {}
     private pending: PendingSettings = {}
-    private dirty = new Set<keyof PendingSettings>()
-    private awaitingCourse: number | undefined
-    private awaitingSettings = false
 
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq)
@@ -228,6 +193,8 @@ export default class Device extends AABBDevice {
             `${korean ? '상태' : 'Status'} · ${name(english, koreanName)}`
         const courseName = (english: string, koreanName: string) =>
             `${korean ? '코스' : 'Course'} · ${name(english, koreanName)}`
+        // The platform-only entries remove the 0.1.18 duplicate sensors/button before the final
+        // device-based discovery config is published without them.
         this.setConfig(
             allowExtendedType({
                 ...HADevice.config(meta, { name: name('LG FX25 Washer', 'LG FX25 세탁기') }),
@@ -253,8 +220,9 @@ export default class Device extends AABBDevice {
                         unique_id: '$deviceid-course-control',
                         state_topic: '$this/course_control',
                         command_topic: '$this/course_control/set',
-                        name: name('Course selection', '코스 선택'),
+                        name: courseName('Program', '코스'),
                         options: options(COURSE_OPTIONS),
+                        optimistic: false,
                         icon: 'mdi:playlist-edit',
                     },
                     soil_control: {
@@ -262,8 +230,9 @@ export default class Device extends AABBDevice {
                         unique_id: '$deviceid-soil-control',
                         state_topic: '$this/soil_control',
                         command_topic: '$this/soil_control/set',
-                        name: name('Wash intensity', '세탁'),
+                        name: courseName('Soil level', '오염도'),
                         options: options(SOIL_OPTIONS),
+                        optimistic: false,
                         icon: 'mdi:liquid-spot',
                     },
                     rinse_control: {
@@ -271,8 +240,9 @@ export default class Device extends AABBDevice {
                         unique_id: '$deviceid-rinse-control',
                         state_topic: '$this/rinse_control',
                         command_topic: '$this/rinse_control/set',
-                        name: name('Rinse setting', '헹굼'),
+                        name: courseName('Rinse count', '헹굼 횟수'),
                         options: options(RINSE_OPTIONS),
+                        optimistic: false,
                         icon: 'mdi:water-sync',
                     },
                     spin_control: {
@@ -280,8 +250,9 @@ export default class Device extends AABBDevice {
                         unique_id: '$deviceid-spin-control',
                         state_topic: '$this/spin_control',
                         command_topic: '$this/spin_control/set',
-                        name: name('Spin setting', '탈수'),
+                        name: courseName('Spin level', '탈수 세기'),
                         options: options(SPIN_OPTIONS),
+                        optimistic: false,
                         icon: 'mdi:rotate-right',
                     },
                     temperature_control: {
@@ -289,8 +260,9 @@ export default class Device extends AABBDevice {
                         unique_id: '$deviceid-temperature-control',
                         state_topic: '$this/temperature_control',
                         command_topic: '$this/temperature_control/set',
-                        name: name('Wash temperature setting', '물온도'),
+                        name: courseName('Wash temperature', '세탁 온도'),
                         options: options(TEMPERATURE_OPTIONS),
+                        optimistic: false,
                         icon: 'mdi:thermometer',
                     },
                     turbo_wash_control: {
@@ -298,16 +270,10 @@ export default class Device extends AABBDevice {
                         unique_id: '$deviceid-turbo-wash-control',
                         state_topic: '$this/turbo_wash_control',
                         command_topic: '$this/turbo_wash_control/set',
-                        name: name('TurboWash setting', '터보샷'),
+                        name: courseName('TurboWash', '터보샷'),
                         options: options(TURBO_OPTIONS),
+                        optimistic: false,
                         icon: 'mdi:rocket-launch',
-                    },
-                    apply_cycle_settings: {
-                        platform: 'button',
-                        unique_id: '$deviceid-apply-cycle-settings',
-                        command_topic: '$this/apply_cycle_settings/set',
-                        name: name('Send to washer', '세탁기에 전송'),
-                        icon: 'mdi:send',
                     },
                     status: {
                         platform: 'sensor',
@@ -315,13 +281,6 @@ export default class Device extends AABBDevice {
                         state_topic: '$this/status',
                         name: statusName('Current status', '현재 상태'),
                         icon: 'mdi:state-machine',
-                    },
-                    course: {
-                        platform: 'sensor',
-                        unique_id: '$deviceid-course',
-                        state_topic: '$this/course',
-                        name: courseName('Program', '코스'),
-                        icon: 'mdi:pin-outline',
                     },
                     remaining_time: {
                         platform: 'sensor',
@@ -349,36 +308,6 @@ export default class Device extends AABBDevice {
                         device_class: 'duration',
                         unit_of_measurement: 'min',
                         icon: 'mdi:clock-outline',
-                    },
-                    soil: {
-                        platform: 'sensor',
-                        unique_id: '$deviceid-soil',
-                        state_topic: '$this/soil',
-                        name: courseName('Soil level', '오염도'),
-                        icon: 'mdi:liquid-spot',
-                    },
-                    rinse: {
-                        platform: 'sensor',
-                        unique_id: '$deviceid-rinse',
-                        state_topic: '$this/rinse',
-                        name: courseName('Rinse count', '헹굼 횟수'),
-                        icon: 'mdi:water-sync',
-                    },
-                    spin: {
-                        platform: 'sensor',
-                        unique_id: '$deviceid-spin',
-                        state_topic: '$this/spin',
-                        name: courseName('Spin level', '탈수 세기'),
-                        unit_of_measurement: 'rpm',
-                        icon: 'mdi:rotate-right',
-                    },
-                    temperature: {
-                        platform: 'sensor',
-                        unique_id: '$deviceid-temperature',
-                        state_topic: '$this/temperature',
-                        name: courseName('Wash temperature', '세탁 온도'),
-                        icon: 'mdi:thermometer',
-                        value_template: "{{ value if value | is_number else 'None' }}",
                     },
                     door: {
                         platform: 'binary_sensor',
@@ -408,13 +337,6 @@ export default class Device extends AABBDevice {
                         state_topic: '$this/remote_start',
                         name: statusName('Remote start', '원격 제어'),
                         icon: 'mdi:remote',
-                    },
-                    turbo_wash: {
-                        platform: 'binary_sensor',
-                        unique_id: '$deviceid-turbo-wash',
-                        state_topic: '$this/turbo_wash',
-                        name: courseName('TurboWash', '터보샷'),
-                        icon: 'mdi:rocket-launch',
                     },
                     pre_wash: {
                         platform: 'binary_sensor',
@@ -457,6 +379,15 @@ export default class Device extends AABBDevice {
                     },
                 },
             }),
+            {
+                course: { platform: 'sensor' },
+                soil: { platform: 'sensor' },
+                rinse: { platform: 'sensor' },
+                spin: { platform: 'sensor' },
+                temperature: { platform: 'sensor' },
+                turbo_wash: { platform: 'binary_sensor' },
+                apply_cycle_settings: { platform: 'button' },
+            },
         )
     }
 
@@ -476,6 +407,28 @@ export default class Device extends AABBDevice {
             buf[8] === 0x00
         ) {
             return this.processStateBlock(buf.subarray(COMPACT_HEADER_LENGTH))
+        }
+        // A cycle-settings write first receives a tiny generic ACK, followed about one second later
+        // by this extended E6 response. Its eight echoed setting pairs are followed by a complete
+        // authoritative state block, so no polling is needed while waiting for the later 0x98 update.
+        if (
+            buf[1] === COMPACT_TYPE &&
+            buf.length === SETTINGS_RESPONSE_HEADER_LENGTH + STATE_BLOCK_LENGTH &&
+            buf[4] === 0x01 &&
+            buf[5] === 0xff &&
+            buf[6] === 0x08 &&
+            buf[7] === 0x1e &&
+            buf[9] === 0x20 &&
+            buf[11] === 0x21 &&
+            buf[13] === 0x1f &&
+            buf[15] === 0x35 &&
+            buf[17] === 0x3e &&
+            buf[19] === 0x43 &&
+            buf[21] === 0x7f
+        ) {
+            return this.processStateBlock(
+                buf.subarray(SETTINGS_RESPONSE_HEADER_LENGTH, SETTINGS_RESPONSE_HEADER_LENGTH + STATE_BLOCK_LENGTH),
+            )
         }
 
         if (buf[3] === DOOR_TYPE) return this.processDoor(buf)
@@ -512,38 +465,21 @@ export default class Device extends AABBDevice {
         }
 
         if (prop === 'course_control') {
+            if (!this.poweredOn) return
             const code = this.codeFor(COURSE_OPTIONS, mqttValue)
             if (code === undefined) return
             this.pending.course = code
-            this.dirty.add('course')
-            return this.publishProperty(prop, mqttValue)
+            return this.send(Buffer.from([0xf0, 0xe5, 0x00, 0x02, 0x01, 0xff, 0x01, 0x0a, code]))
         }
 
         const setting = CYCLE_SETTINGS.find((candidate) => CONTROL_PROPERTY[candidate] === prop)
         if (setting !== undefined) {
+            if (!this.poweredOn) return
             const code = this.codeFor(SETTING_OPTIONS[setting], mqttValue)
             if (code === undefined) return
             this.pending[setting] = code
-            this.dirty.add(setting)
-            // ThinQ adjusts rinse when TurboWash changes. Deliberately keep HA's choices independent;
-            // the explicit send button transmits exactly what the user selected.
-            return this.publishProperty(prop, mqttValue)
+            return this.sendSettings({ ...this.actual, ...this.pending })
         }
-
-        if (prop !== 'apply_cycle_settings' || !this.poweredOn) return
-
-        if (
-            this.dirty.has('course') &&
-            this.pending.course !== undefined &&
-            this.pending.course !== this.currentCourse
-        ) {
-            this.awaitingCourse = this.pending.course
-            return this.send(Buffer.from([0xf0, 0xe5, 0x00, 0x02, 0x01, 0xff, 0x01, 0x0a, this.pending.course]))
-        }
-
-        this.dirty.delete('course')
-        this.publishPendingCourse()
-        this.sendPendingSettings()
     }
 
     private labelFor(options: LocalOption[], code: number): string | undefined {
@@ -552,37 +488,23 @@ export default class Device extends AABBDevice {
     }
 
     private codeFor(options: LocalOption[], label: string): number | undefined {
-        return options.find((item) => (this.korean ? item.ko : item.en) === label)?.code
+        return options.find((item) => item.writable !== false && (this.korean ? item.ko : item.en) === label)?.code
     }
 
-    private publishPendingCourse() {
-        if (this.pending.course === undefined) return
-        const label = this.labelFor(COURSE_OPTIONS, this.pending.course)
-        if (label !== undefined) this.publishProperty('course_control', label)
-    }
-
-    private syncPendingSetting(setting: CycleSetting, code: number) {
-        if (this.dirty.has(setting)) return
-        this.pending[setting] = code
+    private publishActualSetting(setting: CycleSetting, code: number) {
         const label = this.labelFor(SETTING_OPTIONS[setting], code)
         if (label !== undefined) this.publishProperty(CONTROL_PROPERTY[setting], label)
     }
 
-    private sendPendingSettings() {
+    private sendSettings(settings: PendingSettings) {
         if (
-            ![
-                this.pending.soil,
-                this.pending.rinse,
-                this.pending.spin,
-                this.pending.temperature,
-                this.pending.turbo,
-            ].every((value) => value !== undefined)
+            ![settings.soil, settings.rinse, settings.spin, settings.temperature, settings.turbo].every(
+                (value) => value !== undefined,
+            )
         )
             return
-        if (!CYCLE_SETTINGS.some((setting) => this.dirty.has(setting))) return
 
-        const { soil, rinse, spin, temperature, turbo } = this.pending
-        this.awaitingSettings = true
+        const { soil, rinse, spin, temperature, turbo } = settings
         this.send(
             Buffer.from([
                 0xf0,
@@ -627,21 +549,13 @@ export default class Device extends AABBDevice {
         this.poweredOn = !isOff
         this.publishProperty('power', isOff ? 'OFF' : 'ON')
         this.publishProperty('status', STATUS[state] ?? 'Running')
-        this.publishProperty('course', COURSE[block[5]] ?? 'unknown')
         this.publishProperty('remaining_time', isOff ? 0 : minutes(block, 13))
         this.publishProperty('initial_time', isOff ? 0 : minutes(block, 15))
         this.publishProperty('reserve_time', isOff ? 0 : minutes(block, 11))
-        this.publishProperty('soil', SOIL[block[1]] ?? 'unknown')
-        // Labelled one-setting-at-a-time captures proved that temperature precedes rinse here.
-        // Earlier FX25 support had these two adjacent offsets reversed.
-        this.publishProperty('rinse', block[3])
-        this.publishProperty('temperature', TEMPERATURE[block[2]] ?? 'unknown')
-        this.publishProperty('spin', SPIN[block[4]] ?? 'unknown')
         this.publishProperty('error', ERROR[block[19]] ?? `Unknown (${block[19]})`)
         this.publishProperty('tub_clean_count', block[28])
 
         const turbo = (block[34] & 0x20) !== 0 ? 1 : 0
-        this.publishProperty('turbo_wash', turbo !== 0 ? 'ON' : 'OFF')
         this.publishProperty('pre_wash', (block[34] & 0x40) !== 0 ? 'ON' : 'OFF')
         this.publishProperty('steam', (block[35] & 0x10) !== 0 ? 'ON' : 'OFF')
         this.publishProperty('crease_care', (block[36] & 0x80) !== 0 ? 'ON' : 'OFF')
@@ -653,7 +567,7 @@ export default class Device extends AABBDevice {
         // replace pending controls. A powered-on state frame is the appliance's authoritative state.
         if (isOff) return
 
-        const actual: PendingSettings = {
+        this.actual = {
             course: block[5],
             soil: block[1],
             temperature: block[2],
@@ -661,27 +575,10 @@ export default class Device extends AABBDevice {
             spin: block[4],
             turbo,
         }
-        this.currentCourse = actual.course
+        this.pending = {}
 
-        if (this.awaitingSettings) {
-            this.awaitingSettings = false
-            for (const setting of CYCLE_SETTINGS) this.dirty.delete(setting)
-        }
-
-        if (!this.dirty.has('course')) {
-            this.pending.course = actual.course
-            this.publishPendingCourse()
-        }
-        for (const setting of CYCLE_SETTINGS) {
-            this.syncPendingSetting(setting, actual[setting]!)
-        }
-
-        if (this.awaitingCourse !== undefined && actual.course === this.awaitingCourse) {
-            this.awaitingCourse = undefined
-            this.dirty.delete('course')
-            this.pending.course = actual.course
-            this.publishPendingCourse()
-            this.sendPendingSettings()
-        }
+        const course = this.labelFor(COURSE_OPTIONS, this.actual.course!)
+        if (course !== undefined) this.publishProperty('course_control', course)
+        for (const setting of CYCLE_SETTINGS) this.publishActualSetting(setting, this.actual[setting]!)
     }
 }

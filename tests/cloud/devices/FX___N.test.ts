@@ -49,6 +49,9 @@ const DUVET_SELECTED = buf(
 const RINSE_ONE = buf(
     'AAFF200A0098009F8A000100EC008600030302062E00000000000000002300230000002E010005000000020D040000000020000000000038000000000000040000000000000000000000000000001800000000030301062E00000000000000001D001D0000002E010005000000010D0400000000200000000000380000000000000400000000000000000000000000000018000000A339BB',
 )
+const SETTINGS_RESPONSE = buf(
+    'AA5E20E6000201FF081E00200021001F0035003E1143117F1100010802012E00000000000000002600260001002E010005000000020D040000000000000000000038000000000000040000000000000000000000000000001800000075BB',
+)
 
 function makeDevice(meta: Metadata = META) {
     const ha = new MockHAConnection()
@@ -58,25 +61,19 @@ function makeDevice(meta: Metadata = META) {
 }
 
 describe('FX___N', () => {
-    test('preserves read-only status entities and adds captured cycle-setting controls', () => {
+    test('keeps status entities and exposes each duplicated course value only as a non-optimistic select', () => {
         const { ha } = makeDevice()
         const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
         for (const id of [
             'power',
             'status',
-            'course',
             'remaining_time',
             'initial_time',
             'reserve_time',
-            'soil',
-            'rinse',
-            'spin',
-            'temperature',
             'door',
             'door_lock',
             'child_lock',
             'remote_start',
-            'turbo_wash',
             'pre_wash',
             'steam',
             'crease_care',
@@ -97,12 +94,13 @@ describe('FX___N', () => {
             'temperature_control',
             'turbo_wash_control',
         ]) {
-            assert.equal(components[id].platform, 'select', `${id} is an explicit pending selection`)
+            assert.equal(components[id].platform, 'select', `${id} is the single course value entity`)
             assert.equal(components[id].state_topic, `$this/${id}`)
             assert.equal(components[id].command_topic, `$this/${id}/set`)
+            assert.equal(components[id].optimistic, false)
         }
-        assert.equal(components.apply_cycle_settings.platform, 'button')
-        assert.equal(components.apply_cycle_settings.command_topic, '$this/apply_cycle_settings/set')
+        for (const id of ['course', 'soil', 'rinse', 'spin', 'temperature', 'turbo_wash', 'apply_cycle_settings'])
+            assert.equal(components[id], undefined, `${id} duplicate/obsolete component removed`)
         assert.deepEqual(
             Object.fromEntries(
                 [
@@ -113,13 +111,13 @@ describe('FX___N', () => {
                     'door',
                     'child_lock',
                     'remote_start',
-                    'course',
+                    'course_control',
                     'reserve_time',
-                    'soil',
-                    'rinse',
-                    'spin',
-                    'temperature',
-                    'turbo_wash',
+                    'soil_control',
+                    'rinse_control',
+                    'spin_control',
+                    'temperature_control',
+                    'turbo_wash_control',
                     'pre_wash',
                     'steam',
                     'crease_care',
@@ -133,32 +131,32 @@ describe('FX___N', () => {
                 door: 'Status · Door',
                 child_lock: 'Status · Child lock',
                 remote_start: 'Status · Remote start',
-                course: 'Course · Program',
+                course_control: 'Course · Program',
                 reserve_time: 'Course · Reserved start time',
-                soil: 'Course · Soil level',
-                rinse: 'Course · Rinse count',
-                spin: 'Course · Spin level',
-                temperature: 'Course · Wash temperature',
-                turbo_wash: 'Course · TurboWash',
+                soil_control: 'Course · Soil level',
+                rinse_control: 'Course · Rinse count',
+                spin_control: 'Course · Spin level',
+                temperature_control: 'Course · Wash temperature',
+                turbo_wash_control: 'Course · TurboWash',
                 pre_wash: 'Course · Pre-wash',
                 steam: 'Course · Steam',
                 crease_care: 'Course · Crease care',
             },
         )
         for (const id of [
-            'course',
+            'course_control',
             'reserve_time',
-            'soil',
-            'rinse',
-            'spin',
-            'temperature',
-            'turbo_wash',
+            'soil_control',
+            'rinse_control',
+            'spin_control',
+            'temperature_control',
+            'turbo_wash_control',
             'pre_wash',
             'steam',
             'crease_care',
         ]) {
             assert.match(components[id].name as string, /^Course · /, `${id} sorts with course settings`)
-            assert.equal(components[id].entity_category, undefined, `${id} remains in the Sensor section`)
+            assert.equal(components[id].entity_category, undefined, `${id} remains in the normal entity section`)
         }
         for (const id of ['power', 'status', 'remaining_time', 'initial_time', 'door', 'child_lock', 'remote_start']) {
             assert.match(components[id].name as string, /^Status · /, `${id} sorts with current status`)
@@ -173,7 +171,7 @@ describe('FX___N', () => {
         assert.equal(components.door_lock.entity_category, 'diagnostic')
     })
 
-    test('uses LG Korean display names for a KR device without changing discovery identity or topics', () => {
+    test('uses LG Korean display names and preserves the existing select discovery identities', () => {
         const { ha } = makeDevice(KOREAN_META)
         const config = ha.devices[DEVICE_ID].config!
         const components = config.components as Record<string, Record<string, unknown>>
@@ -188,13 +186,13 @@ describe('FX___N', () => {
                     'door',
                     'child_lock',
                     'remote_start',
-                    'course',
+                    'course_control',
                     'reserve_time',
-                    'soil',
-                    'rinse',
-                    'spin',
-                    'temperature',
-                    'turbo_wash',
+                    'soil_control',
+                    'rinse_control',
+                    'spin_control',
+                    'temperature_control',
+                    'turbo_wash_control',
                     'pre_wash',
                     'steam',
                     'crease_care',
@@ -208,13 +206,13 @@ describe('FX___N', () => {
                 door: '상태 · 문',
                 child_lock: '상태 · 버튼 잠금',
                 remote_start: '상태 · 원격 제어',
-                course: '코스 · 코스',
+                course_control: '코스 · 코스',
                 reserve_time: '코스 · 예약 시간',
-                soil: '코스 · 오염도',
-                rinse: '코스 · 헹굼 횟수',
-                spin: '코스 · 탈수 세기',
-                temperature: '코스 · 세탁 온도',
-                turbo_wash: '코스 · 터보샷',
+                soil_control: '코스 · 오염도',
+                rinse_control: '코스 · 헹굼 횟수',
+                spin_control: '코스 · 탈수 세기',
+                temperature_control: '코스 · 세탁 온도',
+                turbo_wash_control: '코스 · 터보샷',
                 pre_wash: '코스 · 애벌세탁',
                 steam: '코스 · 스팀',
                 crease_care: '코스 · 구김방지',
@@ -223,16 +221,26 @@ describe('FX___N', () => {
         assert.equal(components.power_control.name, '전원 제어')
         assert.equal(components.tub_clean_count.name, '사용 횟수')
         assert.equal(components.error.name, '오류')
-        assert.equal(components.course.unique_id, '$deviceid-course')
-        assert.equal(components.course.state_topic, '$this/course')
-        assert.equal(components.course.command_topic, undefined)
-        assert.equal(components.course_control.name, '코스 선택')
-        assert.deepEqual(components.soil_control.options, ['적은때', '표준', '강력'])
-        assert.deepEqual(components.rinse_control.options, ['1회', '2회', '3회'])
+        assert.equal(components.course_control.unique_id, '$deviceid-course-control')
+        assert.equal(components.course_control.state_topic, '$this/course_control')
+        assert.equal(components.course_control.command_topic, '$this/course_control/set')
+        assert.deepEqual(components.soil_control.options, ['세탁 안 함', '적은때', '표준', '강력', '애벌세탁', '불림'])
+        assert.deepEqual(components.rinse_control.options, ['헹굼 안 함', '1회', '2회', '3회', '4회', '5회'])
         assert.deepEqual(components.spin_control.options, ['꺼짐', '섬세', '약', '중', '강', '건조 맞춤'])
-        assert.deepEqual(components.temperature_control.options, ['냉수', '30℃', '40℃', '60℃'])
+        assert.deepEqual(components.temperature_control.options, ['물온도 없음', '냉수', '30℃', '40℃', '60℃', '95℃'])
         assert.deepEqual(components.turbo_wash_control.options, ['꺼짐', '켜짐'])
-        assert.equal(components.apply_cycle_settings.name, '세탁기에 전송')
+    })
+
+    test('publishes platform-only removal updates before omitting legacy duplicate entities', () => {
+        const { ha } = makeDevice()
+        assert.equal(ha.configHistory.length, 2)
+        const migration = ha.configHistory[0].config.components as Record<string, Record<string, unknown>>
+        const final = ha.configHistory[1].config.components as Record<string, Record<string, unknown>>
+        assert.deepEqual(migration.course, { platform: 'sensor' })
+        assert.deepEqual(migration.turbo_wash, { platform: 'binary_sensor' })
+        assert.deepEqual(migration.apply_cycle_settings, { platform: 'button' })
+        for (const id of ['course', 'soil', 'rinse', 'spin', 'temperature', 'turbo_wash', 'apply_cycle_settings'])
+            assert.equal(final[id], undefined)
     })
 
     test('HA power writes reproduce both official ThinQ command frames byte-for-byte', () => {
@@ -250,9 +258,30 @@ describe('FX___N', () => {
         dev.setProperty('power', 'TOGGLE')
         dev.setProperty('course_control', 'Not a course')
         dev.setProperty('soil_control', 'Extreme')
-        dev.setProperty('apply_cycle_settings', 'PRESS') // no powered-on state yet
+        dev.setProperty('soil_control', '애벌세탁') // reported-only option, not validated for writes
         dev.setProperty('start', 'PRESS')
 
+        assert.deepEqual(thinq.outbox, [])
+    })
+
+    test('reported-only options and all setting writes while powered off are rejected', () => {
+        const { thinq, dev } = makeDevice(KOREAN_META)
+        thinq.emit('data', POWER_ON)
+        thinq.resetRecorder()
+
+        dev.setProperty('soil_control', '애벌세탁')
+        dev.setProperty('rinse_control', '4회')
+        dev.setProperty('temperature_control', '95℃')
+        assert.deepEqual(
+            thinq.outbox,
+            [],
+            'uncaptured writes remain unavailable even though reported values can display',
+        )
+
+        thinq.emit('data', POWER_OFF)
+        thinq.resetRecorder()
+        dev.setProperty('course_control', '이불')
+        dev.setProperty('rinse_control', '1회')
         assert.deepEqual(thinq.outbox, [])
     })
 
@@ -262,7 +291,7 @@ describe('FX___N', () => {
         const p = ha.devices[DEVICE_ID].properties
         assert.equal(p.power, 'OFF')
         assert.equal(p.status, 'Off')
-        assert.equal(p.course, 'Normal')
+        assert.equal(p.course_control, undefined, 'powered-off sentinel state does not replace the last actual setting')
         assert.equal(p.remaining_time, 0)
         assert.equal(p.initial_time, 0)
         assert.equal(p.error, 'No error')
@@ -275,27 +304,39 @@ describe('FX___N', () => {
         const p = ha.devices[DEVICE_ID].properties
         assert.equal(p.power, 'ON')
         assert.equal(p.status, 'Initial')
-        assert.equal(p.course, 'Normal')
+        assert.equal(p.course_control, 'Normal')
         assert.equal(p.remaining_time, 35)
         assert.equal(p.initial_time, 35)
-        assert.equal(p.soil, 'Normal')
-        assert.equal(p.rinse, 2)
-        assert.equal(p.temperature, 40)
-        assert.equal(p.spin, 1000)
-        assert.equal(p.turbo_wash, 'ON')
+        assert.equal(p.soil_control, 'Normal')
+        assert.equal(p.rinse_control, '2 rinses')
+        assert.equal(p.temperature_control, '40 °C')
+        assert.equal(p.spin_control, 'High')
+        assert.equal(p.turbo_wash_control, 'On')
     })
 
     test('real one-setting capture proves temperature and rinse occupy distinct adjacent offsets', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', RINSE_ONE)
         const p = ha.devices[DEVICE_ID].properties
-        assert.equal(p.temperature, 40)
-        assert.equal(p.rinse, 1)
-        assert.equal(p.spin, 1000)
-        assert.equal(p.soil, 'Normal')
+        assert.equal(p.temperature_control, '40 °C')
+        assert.equal(p.rinse_control, '1 rinse')
+        assert.equal(p.spin_control, 'High')
+        assert.equal(p.soil_control, 'Normal')
     })
 
-    test('pending controls reproduce the captured ThinQ settings bundle byte-for-byte', () => {
+    test('the post-write E6 response publishes its authoritative settings block without polling', () => {
+        const { ha, thinq } = makeDevice(KOREAN_META)
+        thinq.emit('data', SETTINGS_RESPONSE)
+        const p = ha.devices[DEVICE_ID].properties
+        assert.equal(p.course_control, '표준')
+        assert.equal(p.soil_control, '적은때')
+        assert.equal(p.rinse_control, '2회')
+        assert.equal(p.spin_control, '섬세')
+        assert.equal(p.temperature_control, '냉수')
+        assert.equal(p.turbo_wash_control, '꺼짐')
+    })
+
+    test('a select command sends immediately but keeps the reported value until the appliance confirms it', () => {
         const { ha, thinq, dev } = makeDevice(KOREAN_META)
         thinq.emit('data', POWER_ON)
 
@@ -306,41 +347,49 @@ describe('FX___N', () => {
         assert.equal(ha.devices[DEVICE_ID].properties.temperature_control, '40℃')
         assert.equal(ha.devices[DEVICE_ID].properties.turbo_wash_control, '켜짐')
 
-        dev.setProperty('soil_control', '적은때')
-        dev.setProperty('rinse_control', '3회')
-        dev.setProperty('spin_control', '약')
-        dev.setProperty('temperature_control', '30℃')
-        dev.setProperty('turbo_wash_control', '꺼짐')
-        assert.deepEqual(thinq.outbox, [], 'select changes stay local until the explicit send button')
+        dev.setProperty('rinse_control', '1회')
+        assert.equal(ha.devices[DEVICE_ID].properties.rinse_control, '2회', 'commanded state is not published')
+        assert.equal(thinq.outbox.length, 1)
+        assert.equal(
+            thinq.outbox[0].subarray(2, -2).toString('hex'),
+            'f0e5000201ff081e03200121061f0335013e0043007f0000',
+        )
 
-        dev.setProperty('apply_cycle_settings', 'PRESS')
-        assert.deepEqual(thinq.outbox, [buf('AA1CF0E5000201FF081E01200321021F0235003E0043007F000035BB')])
+        thinq.emit('data', RINSE_ONE)
+        assert.equal(ha.devices[DEVICE_ID].properties.rinse_control, '1회', 'reported state is authoritative')
     })
 
-    test('course selection waits for appliance confirmation before sending dirty settings', () => {
+    test('course selection is immediate and all select states follow the appliance response', () => {
         const { ha, thinq, dev } = makeDevice(KOREAN_META)
         thinq.emit('data', POWER_ON)
         dev.setProperty('course_control', '이불')
-        dev.setProperty('rinse_control', '1회')
-        dev.setProperty('apply_cycle_settings', 'PRESS')
 
         assert.deepEqual(thinq.outbox, [buf('AA0DF0E5000201FF010A1BE1BB')])
+        assert.equal(ha.devices[DEVICE_ID].properties.course_control, '표준')
         thinq.emit('data', DUVET_SELECTED)
         assert.equal(ha.devices[DEVICE_ID].properties.course_control, '이불')
         assert.equal(ha.devices[DEVICE_ID].properties.temperature_control, '냉수')
         assert.equal(ha.devices[DEVICE_ID].properties.spin_control, '중')
-        assert.equal(ha.devices[DEVICE_ID].properties.rinse_control, '1회', 'dirty choice survives course defaults')
-        assert.equal(thinq.outbox.length, 2, 'settings follow only after the requested course is confirmed')
-        assert.deepEqual(thinq.outbox[1], buf('AA1CF0E5000201FF081E03200121041F0835003E0043007F00003DBB'))
+        assert.equal(ha.devices[DEVICE_ID].properties.rinse_control, '3회')
+        assert.equal(thinq.outbox.length, 1, 'reported defaults do not trigger extra writes')
     })
 
-    test('course-only send does not add an unnecessary settings bundle', () => {
-        const { thinq, dev } = makeDevice()
+    test('a rejected request reverts to the reported value and clears pending command data', () => {
+        const { ha, thinq, dev } = makeDevice(KOREAN_META)
         thinq.emit('data', POWER_ON)
-        dev.setProperty('course_control', 'Duvet')
-        dev.setProperty('apply_cycle_settings', 'PRESS')
-        thinq.emit('data', DUVET_SELECTED)
-        assert.deepEqual(thinq.outbox, [buf('AA0DF0E5000201FF010A1BE1BB')])
+        dev.setProperty('rinse_control', '1회')
+        thinq.emit('data', POWER_ON) // appliance retained 2 rinses instead of accepting 1
+        assert.equal(ha.devices[DEVICE_ID].properties.rinse_control, '2회')
+
+        thinq.resetRecorder()
+        dev.setProperty('spin_control', '중')
+        assert.equal(ha.devices[DEVICE_ID].properties.spin_control, '강')
+        assert.equal(thinq.outbox.length, 1)
+        assert.equal(
+            thinq.outbox[0].subarray(2, -2).toString('hex'),
+            'f0e5000201ff081e03200221041f0335013e0043007f0000',
+            'the next command uses the reported rinse value, not the rejected pending request',
+        )
     })
 
     test('real power-off update clears the countdown and uses the current block', () => {
@@ -363,7 +412,7 @@ describe('FX___N', () => {
         assert.equal(p.status, 'Initial')
         assert.equal(p.remaining_time, 35)
         assert.equal(p.initial_time, 35)
-        assert.equal(p.course, 'Normal')
+        assert.equal(p.course_control, 'Normal')
 
         thinq.emit('data', COMPACT_POWER_OFF)
         assert.equal(p.power, 'OFF')

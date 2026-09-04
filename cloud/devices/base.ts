@@ -28,8 +28,17 @@ export default class HADevice {
         readonly id: string,
     ) {}
 
-    setConfig(config: DeviceDiscovery) {
+    setConfig(config: DeviceDiscovery, removedComponents?: Record<string, { platform: string }>) {
         this.config = config
+        if (removedComponents) {
+            // Device-based MQTT discovery removes a component only after receiving a platform-only
+            // update for that component. Send the removal form before the final current config.
+            this.HA.publishProperty(this.id, 'availability', 'online')
+            this.HA.publishConfig(this.id, {
+                ...config,
+                components: { ...config.components, ...removedComponents },
+            } as unknown as DeviceDiscovery)
+        }
         this.publishConfig()
     }
 
