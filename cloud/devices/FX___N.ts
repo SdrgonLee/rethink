@@ -4,6 +4,8 @@ import { type ComponentInfo, type Connection } from '../homeassistant'
 import { type Metadata } from '../thinq'
 import { Device as Thinq2Device } from '../thinq2/device'
 import { allowExtendedType } from '@/util/casting'
+import { dirname, join, resolve } from 'node:path'
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 
 // LG FX25 front-load washer (modelId FX___N, protocolVer 7).
 //
@@ -28,6 +30,48 @@ const UPDATE_TYPE = 0x98
 const COMPACT_TYPE = 0xe6
 const DOOR_TYPE = 0x18
 const DOOR_OFFSET = 18
+const ENERGY_TYPE = 0x3e
+const ENERGY_PACKET_LENGTH = 7
+const ENERGY_INTERVAL_MINUTES = 15
+const CYCLE_ACTIVE_STATES = new Set([
+    0x03, // Detecting
+    0x05, // Draining
+    0x06, // Detecting detergent amount
+    0x08, // Soaking
+    0x09, // Pre-wash
+    0x0b, // Washing
+    0x0c, // Rinsing
+    0x0d, // Rinse hold
+    0x0e, // Spinning
+    0x0f, // Drying
+    0x25, // Detecting load
+    0x26, // Adding detergent
+    0x27, // Adding softener
+    0x28, // Detecting soil
+    0x29, // Tub cleaning
+    0x2b, // Steam
+])
+
+type EnergyStats = {
+    month: string
+    monthWh: number
+    cycleWh: number
+    lastCycleWh?: number
+    lastSequence?: number
+}
+
+function localMonth(timestamp = Date.now()): string {
+    const date = new Date(timestamp)
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+}
+
+function energyStatsPath(deviceId: string): string | undefined {
+    // Production is launched as `rethink-cloud ... /data/rethink/config.json`. Keep tests and
+    // library imports side-effect free while storing Add-on state beside the persistent config.
+    if (!process.argv[1]?.includes('rethink-cloud')) return
+    const safeDeviceId = deviceId.replace(/[^a-zA-Z0-9_-]/g, '_')
+    return join(dirname(resolve(process.argv[2] ?? './config.json')), 'state', `fx25-energy-${safeDeviceId}.json`)
+}
 
 type LocalOption = { code: number; en: string; ko: string; writable?: false }
 type CycleSetting = 'soil' | 'rinse' | 'spin' | 'temperature' | 'turbo' | 'reserve'
@@ -202,6 +246,10 @@ export default class Device extends AABBDevice {
     private actual: PendingSettings = {}
     private pending: PendingSettings = {}
     private readonly reportedControlLabels: Record<string, string> = {}
+    private energyStats: EnergyStats
+    private readonly energyMonthTimer: NodeJS.Timeout
+    private hasSeenState = false
+    private cycleInProgress = false
 
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq)
@@ -393,6 +441,42 @@ export default class Device extends AABBDevice {
                         icon: 'mdi:alert-circle-outline',
                         entity_category: 'diagnostic',
                     },
+                    average_power_15m: {
+                        platform: 'sensor',
+                        unique_id: '$deviceid-average-power-15m',
+                        state_topic: '$this/average_power_15m',
+                        name: name('Recent 15-minute average power', '최근 15분 평균 전력'),
+                        device_class: 'power',
+                        unit_of_measurement: 'W',
+                        state_class: 'measurement',
+                        suggested_display_precision: 0,
+                        icon: 'mdi:flash',
+                        entity_category: 'diagnostic',
+                    },
+                    cycle_energy: {
+                        platform: 'sensor',
+                        unique_id: '$deviceid-cycle-energy',
+                        state_topic: '$this/cycle_energy',
+                        name: name('Current cycle energy', '현재 세탁 사용량'),
+                        device_class: 'energy',
+                        unit_of_measurement: 'Wh',
+                        state_class: 'total',
+                        suggested_display_precision: 0,
+                        icon: 'mdi:lightning-bolt',
+                        entity_category: 'diagnostic',
+                    },
+                    energy_month: {
+                        platform: 'sensor',
+                        unique_id: '$deviceid-energy-month',
+                        state_topic: '$this/energy_month',
+                        name: name('Energy this month', '이번 달 사용량'),
+                        device_class: 'energy',
+                        unit_of_measurement: 'kWh',
+                        state_class: 'total',
+                        suggested_display_precision: 3,
+                        icon: 'mdi:calendar-month',
+                        entity_category: 'diagnostic',
+                    },
                 },
             }),
             {
@@ -416,10 +500,25 @@ export default class Device extends AABBDevice {
                 tub_clean_count: { platform: 'sensor' },
             },
         )
+
+        this.energyStats = this.loadEnergyStats()
+        this.publishProperty('average_power_15m', 0)
+        this.publishEnergyTotals()
+        this.energyMonthTimer = setInterval(() => this.rollEnergyMonth(), 60_000)
+        this.energyMonthTimer.unref()
+    }
+
+    drop() {
+        clearInterval(this.energyMonthTimer)
+        super.drop()
     }
 
     processAABB(buf: Buffer) {
         if (buf[0] !== 0x20 || buf.length < 4) return
+
+        if (buf[1] === ENERGY_TYPE && buf.length === ENERGY_PACKET_LENGTH) {
+            return this.processEnergyPacket(buf)
+        }
 
         // Compact snapshots put their type at inner[1], unlike the extended 0x0A envelope. Power
         // snapshots used 20E6000001FF010200, while a real laundry-care transition used
@@ -614,11 +713,106 @@ export default class Device extends AABBDevice {
         else if (buf[DOOR_OFFSET] === 0x02) this.publishProperty('door', 'OFF')
     }
 
+    private loadEnergyStats(now = Date.now()): EnergyStats {
+        const month = localMonth(now)
+        const empty: EnergyStats = { month, monthWh: 0, cycleWh: 0 }
+        const path = energyStatsPath(this.id)
+        if (path === undefined) return empty
+
+        try {
+            const saved = JSON.parse(readFileSync(path, 'utf8')) as Partial<EnergyStats>
+            return {
+                month,
+                monthWh: saved.month === month && Number.isFinite(saved.monthWh) ? Math.max(0, saved.monthWh!) : 0,
+                cycleWh: Number.isFinite(saved.cycleWh) ? Math.max(0, saved.cycleWh!) : 0,
+                ...(Number.isInteger(saved.lastCycleWh) && saved.lastCycleWh! >= 0
+                    ? { lastCycleWh: saved.lastCycleWh }
+                    : {}),
+                ...(Number.isInteger(saved.lastSequence) && saved.lastSequence! >= 0
+                    ? { lastSequence: saved.lastSequence }
+                    : {}),
+            }
+        } catch {
+            return empty
+        }
+    }
+
+    private saveEnergyStats() {
+        const path = energyStatsPath(this.id)
+        if (path === undefined) return
+
+        const temporary = `${path}.tmp`
+        try {
+            mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+            writeFileSync(temporary, JSON.stringify(this.energyStats), { mode: 0o600 })
+            renameSync(temporary, path)
+        } catch (err) {
+            console.warn(`Unable to save FX25 energy statistics: ${err}`)
+        }
+    }
+
+    private publishEnergyTotals() {
+        this.publishProperty('cycle_energy', this.energyStats.cycleWh)
+        this.publishProperty('energy_month', Number((this.energyStats.monthWh / 1000).toFixed(3)))
+    }
+
+    private rollEnergyMonth(now = Date.now()) {
+        const month = localMonth(now)
+        if (this.energyStats.month === month) return
+
+        this.energyStats.month = month
+        this.energyStats.monthWh = 0
+        this.publishProperty('energy_month', 0)
+        this.saveEnergyStats()
+    }
+
+    private resetCycleEnergy() {
+        this.energyStats.cycleWh = 0
+        delete this.energyStats.lastCycleWh
+        delete this.energyStats.lastSequence
+        this.publishProperty('average_power_15m', 0)
+        this.publishProperty('cycle_energy', 0)
+        this.saveEnergyStats()
+    }
+
+    private processEnergyPacket(buf: Buffer) {
+        const intervalWh = buf.readUInt16BE(2)
+        const cycleWh = buf.readUInt16BE(4)
+        const sequence = buf[6]
+
+        this.rollEnergyMonth()
+        const sameReport = this.energyStats.lastCycleWh === cycleWh && this.energyStats.lastSequence === sequence
+        if (sameReport) return
+
+        const continuesCurrentCycle =
+            this.energyStats.lastCycleWh !== undefined &&
+            this.energyStats.lastSequence !== undefined &&
+            cycleWh >= this.energyStats.lastCycleWh &&
+            sequence >= this.energyStats.lastSequence
+        // Prefer the appliance's authoritative cycle counter over blindly adding intervalWh. Its
+        // delta recovers any 15-minute packets missed while the bridge was restarting or offline.
+        const monthDeltaWh = continuesCurrentCycle ? cycleWh - this.energyStats.lastCycleWh! : cycleWh
+
+        this.energyStats.monthWh += monthDeltaWh
+        this.energyStats.cycleWh = cycleWh
+        this.energyStats.lastCycleWh = cycleWh
+        this.energyStats.lastSequence = sequence
+        this.publishProperty('average_power_15m', intervalWh * (60 / ENERGY_INTERVAL_MINUTES))
+        this.publishEnergyTotals()
+        this.saveEnergyStats()
+    }
+
     private processStateBlock(block: Buffer) {
         if (block.length !== STATE_BLOCK_LENGTH) return
 
         const state = block[21]
         const isOff = state === 0
+        const cycleIsActive = CYCLE_ACTIVE_STATES.has(state)
+        if (this.hasSeenState && cycleIsActive && !this.cycleInProgress) this.resetCycleEnergy()
+        if (cycleIsActive) this.cycleInProgress = true
+        else if (state === 0x00 || state === 0x01 || state === 0x10 || state === 0x17 || state === 0x2a)
+            this.cycleInProgress = false
+        this.hasSeenState = true
         this.currentState = state
         this.publishProperty('power', isOff ? 'OFF' : 'ON')
         this.publishProperty('status', STATUS[state] ?? 'Running')

@@ -64,6 +64,13 @@ const RESERVE_FOUR_AND_HALF_HOURS_RESPONSE = buf(
 const RESERVE_OFF_RESPONSE = buf(
     'AA5E20E6000201FF081E11201121111F1135113E1143117F0000030302062E00000000000000002300230001002E010005000000020D0400000000200000000000380000000000000400000000000000000000000000000018000000D5BB',
 )
+// Real 15-minute energy reports from the remote-start cycle. The payload contains the interval Wh,
+// authoritative cycle-total Wh and one-based interval sequence respectively.
+const ENERGY_INTERVAL_ONE = buf('AA0B203E00250025010BBB')
+const ENERGY_INTERVAL_TWO = buf('AA0B203E0024004902D7BB')
+// A later report from another real cycle: 34 Wh in interval three and 88 Wh for the cycle. Feeding it
+// after interval one also proves that the cumulative delta recovers a missed interval-two packet.
+const ENERGY_INTERVAL_THREE = buf('AA0B203E0022005803C5BB')
 
 function makeDevice(meta: Metadata = META) {
     const ha = new MockHAConnection()
@@ -87,6 +94,9 @@ describe('FX___N', () => {
             'crease_care',
             'tub_clean_count',
             'error',
+            'average_power_15m',
+            'cycle_energy',
+            'energy_month',
         ]) {
             assert.ok(components[id], `${id} component present`)
             assert.equal(components[id].command_topic, undefined, `${id} remains read-only`)
@@ -195,6 +205,23 @@ describe('FX___N', () => {
         assert.equal(components.tub_clean_count.name, 'Use count')
         assert.equal(components.tub_clean_count.entity_category, 'diagnostic')
         assert.equal(components.door_lock.entity_category, undefined)
+        assert.deepEqual(
+            Object.fromEntries(
+                ['average_power_15m', 'cycle_energy', 'energy_month'].map((id) => [id, components[id].entity_category]),
+            ),
+            {
+                average_power_15m: 'diagnostic',
+                cycle_energy: 'diagnostic',
+                energy_month: 'diagnostic',
+            },
+        )
+        assert.equal(components.average_power_15m.device_class, 'power')
+        assert.equal(components.average_power_15m.unit_of_measurement, 'W')
+        assert.equal(components.average_power_15m.state_class, 'measurement')
+        assert.equal(components.cycle_energy.device_class, 'energy')
+        assert.equal(components.cycle_energy.unit_of_measurement, 'Wh')
+        assert.equal(components.energy_month.device_class, 'energy')
+        assert.equal(components.energy_month.unit_of_measurement, 'kWh')
     })
 
     test('uses LG Korean display names and preserves the existing select discovery identities', () => {
@@ -242,6 +269,9 @@ describe('FX___N', () => {
         assert.equal(components.laundry_care_start.name, '세탁물 케어 시작')
         assert.equal(components.tub_clean_count.name, '사용 횟수')
         assert.equal(components.error.name, '오류')
+        assert.equal(components.average_power_15m.name, '최근 15분 평균 전력')
+        assert.equal(components.cycle_energy.name, '현재 세탁 사용량')
+        assert.equal(components.energy_month.name, '이번 달 사용량')
         assert.equal(components.course_control.unique_id, '$deviceid-course-control')
         assert.equal(components.course_control.state_topic, '$this/course_control')
         assert.equal(components.course_control.command_topic, '$this/course_control/set')
@@ -633,6 +663,51 @@ describe('FX___N', () => {
             assert.equal(p.remaining_time, remaining)
             assert.equal(p.tub_clean_count, useCount)
         }
+    })
+
+    test('real 0x3E reports publish 15-minute average power and authoritative cycle energy', () => {
+        const { ha, thinq } = makeDevice()
+        const p = ha.devices[DEVICE_ID].properties
+        assert.equal(p.average_power_15m, 0)
+        assert.equal(p.cycle_energy, 0)
+        assert.equal(p.energy_month, 0)
+
+        thinq.emit('data', ENERGY_INTERVAL_ONE)
+        assert.equal(p.average_power_15m, 148)
+        assert.equal(p.cycle_energy, 37)
+        assert.equal(p.energy_month, 0.037)
+
+        thinq.emit('data', ENERGY_INTERVAL_TWO)
+        assert.equal(p.average_power_15m, 144)
+        assert.equal(p.cycle_energy, 73)
+        assert.equal(p.energy_month, 0.073)
+
+        thinq.emit('data', ENERGY_INTERVAL_TWO)
+        assert.equal(p.energy_month, 0.073, 'a retransmitted interval is not counted twice')
+    })
+
+    test('cycle cumulative energy recovers missed reports and resets only when a new cycle starts', () => {
+        const { ha, thinq } = makeDevice()
+        const p = ha.devices[DEVICE_ID].properties
+
+        thinq.emit('data', ENERGY_INTERVAL_ONE)
+        thinq.emit('data', ENERGY_INTERVAL_THREE)
+        assert.equal(p.average_power_15m, 136)
+        assert.equal(p.cycle_energy, 88)
+        assert.equal(p.energy_month, 0.088, 'the cumulative delta includes the missed second interval')
+
+        thinq.emit('data', CYCLE_COMPLETE)
+        assert.equal(p.cycle_energy, 88, 'completion retains the last cycle total')
+        thinq.emit('data', POWER_ON)
+        assert.equal(p.cycle_energy, 88, 'power-on Initial is not a new wash cycle')
+        thinq.emit('data', CYCLE_WASHING)
+        assert.equal(p.average_power_15m, 0)
+        assert.equal(p.cycle_energy, 0)
+        assert.equal(p.energy_month, 0.088, 'starting a new cycle does not reset the monthly total')
+
+        thinq.emit('data', ENERGY_INTERVAL_ONE)
+        assert.equal(p.cycle_energy, 37)
+        assert.equal(p.energy_month, 0.125)
     })
 
     test('unknown door values and malformed state frames are ignored', () => {
