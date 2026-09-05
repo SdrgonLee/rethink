@@ -60,9 +60,14 @@ type EnergyStats = {
     lastSequence?: number
 }
 
-function localMonth(timestamp = Date.now()): string {
-    const date = new Date(timestamp)
-    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+function localMonth(timestamp = Date.now(), timeZone?: string): string {
+    const parts = new Intl.DateTimeFormat('en', {
+        ...(timeZone === undefined ? {} : { timeZone }),
+        year: 'numeric',
+        month: '2-digit',
+    }).formatToParts(timestamp)
+    const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value
+    return `${part('year')}-${part('month')}`
 }
 
 function energyStatsPath(deviceId: string): string | undefined {
@@ -246,6 +251,7 @@ export default class Device extends AABBDevice {
     private actual: PendingSettings = {}
     private pending: PendingSettings = {}
     private readonly reportedControlLabels: Record<string, string> = {}
+    private readonly energyTimeZone: string | undefined
     private energyStats: EnergyStats
     private readonly energyMonthTimer: NodeJS.Timeout
     private hasSeenState = false
@@ -255,6 +261,9 @@ export default class Device extends AABBDevice {
         super(HA, thinq)
         const korean = meta.countryCode === 'KR' || meta.subCountryCode === 'KR'
         this.korean = korean
+        // FX___N is a Korean-market model and its deploy profile reports +0900. Use the appliance's
+        // calendar boundary even if the Add-on container itself happens to remain on UTC.
+        this.energyTimeZone = korean ? 'Asia/Seoul' : undefined
         const name = (english: string, koreanName: string) => (korean ? koreanName : english)
         const options = (items: LocalOption[]) => items.map((item) => (korean ? item.ko : item.en))
         // MQTT discovery does not expose Home Assistant integration translation keys, so names and
@@ -714,7 +723,7 @@ export default class Device extends AABBDevice {
     }
 
     private loadEnergyStats(now = Date.now()): EnergyStats {
-        const month = localMonth(now)
+        const month = localMonth(now, this.energyTimeZone)
         const empty: EnergyStats = { month, monthWh: 0, cycleWh: 0 }
         const path = energyStatsPath(this.id)
         if (path === undefined) return empty
@@ -757,7 +766,7 @@ export default class Device extends AABBDevice {
     }
 
     private rollEnergyMonth(now = Date.now()) {
-        const month = localMonth(now)
+        const month = localMonth(now, this.energyTimeZone)
         if (this.energyStats.month === month) return
 
         this.energyStats.month = month
