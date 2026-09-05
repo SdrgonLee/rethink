@@ -218,20 +218,13 @@ export default class Device extends AABBDevice {
             allowExtendedType({
                 ...HADevice.config(meta, { name: name('LG FX25 Washer', 'LG FX25 세탁기') }),
                 components: {
-                    power: {
-                        platform: 'binary_sensor',
-                        unique_id: '$deviceid-power',
-                        state_topic: '$this/power',
-                        name: statusName('Power', '전원'),
-                        icon: 'mdi:washing-machine',
-                        device_class: 'running',
-                    },
                     power_control: {
                         platform: 'switch',
                         unique_id: '$deviceid-power-control',
                         state_topic: '$this/power',
                         command_topic: '$this/power/set',
-                        name: name('Power control', '전원 제어'),
+                        name: name('Power', '전원'),
+                        optimistic: false,
                         icon: 'mdi:power',
                     },
                     laundry_care_start: {
@@ -240,6 +233,16 @@ export default class Device extends AABBDevice {
                         command_topic: '$this/laundry_care_start/set',
                         name: name('Start laundry care', '세탁물 케어 시작'),
                         icon: 'mdi:tshirt-crew-outline',
+                        availability: [
+                            { topic: '$this/availability' },
+                            { topic: '$rethink/availability' },
+                            {
+                                topic: '$this/laundry_care_available',
+                                payload_available: 'ON',
+                                payload_not_available: 'OFF',
+                            },
+                        ],
+                        availability_mode: 'all',
                     },
                     course_control: {
                         platform: 'select',
@@ -403,6 +406,7 @@ export default class Device extends AABBDevice {
                 pre_wash: { platform: 'binary_sensor' },
                 steam: { platform: 'binary_sensor' },
                 reserve_time: { platform: 'sensor' },
+                power: { platform: 'binary_sensor' },
             },
         )
     }
@@ -594,6 +598,10 @@ export default class Device extends AABBDevice {
         this.publishProperty('child_lock', (block[37] & 0x20) !== 0 ? 'ON' : 'OFF')
         this.remoteStartEnabled = (block[37] & 0x10) !== 0
         this.publishProperty('remote_start', this.remoteStartEnabled ? 'ON' : 'OFF')
+        this.publishProperty(
+            'laundry_care_available',
+            state === 0x2a && this.remoteStartEnabled ? 'ON' : 'OFF',
+        )
         this.publishProperty('door_lock', (block[38] & 0x01) !== 0 ? 'ON' : 'OFF')
 
         // Powered-off blocks contain sentinels and a mixture of retained settings, so they must not

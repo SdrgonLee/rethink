@@ -77,7 +77,6 @@ describe('FX___N', () => {
         const { ha } = makeDevice()
         const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
         for (const id of [
-            'power',
             'status',
             'remaining_time',
             'initial_time',
@@ -93,10 +92,23 @@ describe('FX___N', () => {
             assert.equal(components[id].command_topic, undefined, `${id} remains read-only`)
         }
         assert.equal(components.power_control.platform, 'switch')
+        assert.equal(components.power_control.unique_id, '$deviceid-power-control')
         assert.equal(components.power_control.state_topic, '$this/power')
         assert.equal(components.power_control.command_topic, '$this/power/set')
+        assert.equal(components.power_control.optimistic, false)
+        assert.equal(components.power_control.name, 'Power')
         assert.equal(components.laundry_care_start.platform, 'button')
         assert.equal(components.laundry_care_start.command_topic, '$this/laundry_care_start/set')
+        assert.equal(components.laundry_care_start.availability_mode, 'all')
+        assert.deepEqual(components.laundry_care_start.availability, [
+            { topic: '$this/availability' },
+            { topic: '$rethink/availability' },
+            {
+                topic: '$this/laundry_care_available',
+                payload_available: 'ON',
+                payload_not_available: 'OFF',
+            },
+        ])
         for (const id of [
             'course_control',
             'soil_control',
@@ -120,12 +132,12 @@ describe('FX___N', () => {
             'turbo_wash',
             'apply_cycle_settings',
             'reserve_time',
+            'power',
         ])
             assert.equal(components[id], undefined, `${id} duplicate/obsolete component removed`)
         assert.deepEqual(
             Object.fromEntries(
                 [
-                    'power',
                     'status',
                     'remaining_time',
                     'initial_time',
@@ -143,7 +155,6 @@ describe('FX___N', () => {
                 ].map((id) => [id, components[id].name]),
             ),
             {
-                power: 'Status · Power',
                 status: 'Status · Current status',
                 remaining_time: 'Status · Remaining time',
                 initial_time: 'Status · Initial time',
@@ -173,7 +184,7 @@ describe('FX___N', () => {
             assert.match(components[id].name as string, /^Course · /, `${id} sorts with course settings`)
             assert.equal(components[id].entity_category, undefined, `${id} remains in the normal entity section`)
         }
-        for (const id of ['power', 'status', 'remaining_time', 'initial_time', 'door', 'child_lock', 'remote_start']) {
+        for (const id of ['status', 'remaining_time', 'initial_time', 'door', 'child_lock', 'remote_start']) {
             assert.match(components[id].name as string, /^Status · /, `${id} sorts with current status`)
             assert.equal(components[id].entity_category, undefined, `${id} remains in the Sensor section`)
         }
@@ -194,7 +205,6 @@ describe('FX___N', () => {
         assert.deepEqual(
             Object.fromEntries(
                 [
-                    'power',
                     'status',
                     'remaining_time',
                     'initial_time',
@@ -212,7 +222,6 @@ describe('FX___N', () => {
                 ].map((id) => [id, components[id].name]),
             ),
             {
-                power: '상태 · 전원',
                 status: '상태 · 현재 상태',
                 remaining_time: '상태 · 남은 시간',
                 initial_time: '상태 · 전체 시간',
@@ -229,7 +238,7 @@ describe('FX___N', () => {
                 crease_care: '코스 · 구김방지',
             },
         )
-        assert.equal(components.power_control.name, '전원 제어')
+        assert.equal(components.power_control.name, '전원')
         assert.equal(components.laundry_care_start.name, '세탁물 케어 시작')
         assert.equal(components.tub_clean_count.name, '사용 횟수')
         assert.equal(components.error.name, '오류')
@@ -263,6 +272,7 @@ describe('FX___N', () => {
         assert.deepEqual(migration.pre_wash, { platform: 'binary_sensor' })
         assert.deepEqual(migration.steam, { platform: 'binary_sensor' })
         assert.deepEqual(migration.reserve_time, { platform: 'sensor' })
+        assert.deepEqual(migration.power, { platform: 'binary_sensor' })
         for (const id of [
             'course',
             'soil',
@@ -274,6 +284,7 @@ describe('FX___N', () => {
             'pre_wash',
             'steam',
             'reserve_time',
+            'power',
         ])
             assert.equal(final[id], undefined)
         assert.equal(final.reserve_time_control.platform, 'select')
@@ -426,16 +437,18 @@ describe('FX___N', () => {
     })
 
     test('laundry care sends the captured command only from Complete with remote control enabled', () => {
-        const { thinq, dev } = makeDevice()
+        const { ha, thinq, dev } = makeDevice()
 
         dev.setProperty('laundry_care_start', 'PRESS')
         thinq.emit('data', POWER_ON)
+        assert.equal(ha.devices[DEVICE_ID].properties.laundry_care_available, 'OFF')
         dev.setProperty('laundry_care_start', 'PRESS')
         const remoteDisabledComplete = Buffer.from(CYCLE_COMPLETE)
         remoteDisabledComplete[119] &= ~0x10 // full packet current block[37]: remoteStart
         thinq.emit('data', remoteDisabledComplete)
         dev.setProperty('laundry_care_start', 'PRESS')
         thinq.emit('data', CYCLE_COMPLETE)
+        assert.equal(ha.devices[DEVICE_ID].properties.laundry_care_available, 'ON')
         dev.setProperty('laundry_care_start', 'IGNORED')
         assert.deepEqual(thinq.outbox, [])
 
@@ -443,6 +456,7 @@ describe('FX___N', () => {
         assert.deepEqual(thinq.outbox, [buf('AA0DF0E5000201FF015701B2BB')])
 
         thinq.emit('data', CYCLE_LAUNDRY_CARE)
+        assert.equal(ha.devices[DEVICE_ID].properties.laundry_care_available, 'OFF')
         dev.setProperty('laundry_care_start', 'PRESS')
         assert.equal(thinq.outbox.length, 1, 'the command cannot be repeated after laundry care begins')
     })
