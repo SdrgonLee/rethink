@@ -119,6 +119,18 @@ describe('FX___N', () => {
                 payload_not_available: 'OFF',
             },
         ])
+        assert.equal(components.remote_cycle_start.platform, 'button')
+        assert.equal(components.remote_cycle_start.command_topic, '$this/remote_cycle_start/set')
+        assert.equal(components.remote_cycle_start.availability_mode, 'all')
+        assert.deepEqual(components.remote_cycle_start.availability, [
+            { topic: '$this/availability' },
+            { topic: '$rethink/availability' },
+            {
+                topic: '$this/remote_cycle_start_available',
+                payload_available: 'ON',
+                payload_not_available: 'OFF',
+            },
+        ])
         for (const id of [
             'course_control',
             'soil_control',
@@ -267,6 +279,7 @@ describe('FX___N', () => {
         )
         assert.equal(components.power_control.name, '전원')
         assert.equal(components.laundry_care_start.name, '세탁물 케어 시작')
+        assert.equal(components.remote_cycle_start.name, '세탁 시작')
         assert.equal(components.tub_clean_count.name, '사용 횟수')
         assert.equal(components.error.name, '오류')
         assert.equal(components.average_power_15m.name, '최근 15분 평균 전력')
@@ -550,6 +563,28 @@ describe('FX___N', () => {
         assert.equal(ha.devices[DEVICE_ID].properties.laundry_care_available, 'OFF')
         dev.setProperty('laundry_care_start', 'PRESS')
         assert.equal(thinq.outbox.length, 1, 'the command cannot be repeated after laundry care begins')
+    })
+
+    test('remote start reproduces the official command only from remote-enabled Initial', () => {
+        const { ha, thinq, dev } = makeDevice()
+
+        dev.setProperty('remote_cycle_start', 'PRESS')
+        assert.deepEqual(thinq.outbox, [])
+
+        const remoteEnabledInitial = Buffer.from(POWER_ON)
+        remoteEnabledInitial[119] |= 0x10 // full packet current block[37]: remoteStart
+        thinq.emit('data', remoteEnabledInitial)
+        assert.equal(ha.devices[DEVICE_ID].properties.remote_cycle_start_available, 'ON')
+
+        dev.setProperty('remote_cycle_start', 'IGNORED')
+        assert.deepEqual(thinq.outbox, [])
+        dev.setProperty('remote_cycle_start', 'PRESS')
+        assert.deepEqual(thinq.outbox, [buf('AA0DF0E5000201FF010301C6BB')])
+
+        thinq.emit('data', CYCLE_WASHING)
+        assert.equal(ha.devices[DEVICE_ID].properties.remote_cycle_start_available, 'OFF')
+        dev.setProperty('remote_cycle_start', 'PRESS')
+        assert.equal(thinq.outbox.length, 1, 'the start command cannot be repeated after the cycle begins')
     })
 
     test('a select command sends immediately but keeps the reported value until the appliance confirms it', () => {

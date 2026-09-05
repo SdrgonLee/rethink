@@ -18,8 +18,9 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 //
 // Offsets were established from labelled power/door and full-cycle captures and checked against FX___N
 // ModelJSON. Power and the cycle-setting controls below reproduce frames captured from the official
-// ThinQ app. Start and pause remain intentionally unavailable. Laundry care is exposed only after a
-// completed cycle while the appliance still reports remote control as enabled.
+// ThinQ app. Remote start is exposed only while the appliance reports Initial and remote control
+// enabled; pause remains intentionally unavailable. Laundry care is exposed only after a completed
+// cycle while the appliance still reports remote control as enabled.
 
 const HEADER_LENGTH = 13
 const COMPACT_HEADER_LENGTH = 9
@@ -295,6 +296,23 @@ export default class Device extends AABBDevice {
                             { topic: '$rethink/availability' },
                             {
                                 topic: '$this/laundry_care_available',
+                                payload_available: 'ON',
+                                payload_not_available: 'OFF',
+                            },
+                        ],
+                        availability_mode: 'all',
+                    },
+                    remote_cycle_start: {
+                        platform: 'button',
+                        unique_id: '$deviceid-remote-cycle-start',
+                        command_topic: '$this/remote_cycle_start/set',
+                        name: name('Start washer', '세탁 시작'),
+                        icon: 'mdi:play-circle-outline',
+                        availability: [
+                            { topic: '$this/availability' },
+                            { topic: '$rethink/availability' },
+                            {
+                                topic: '$this/remote_cycle_start_available',
                                 payload_available: 'ON',
                                 payload_not_available: 'OFF',
                             },
@@ -615,6 +633,14 @@ export default class Device extends AABBDevice {
             return this.send(Buffer.from('F0E5000201FF015701', 'hex'))
         }
 
+        if (prop === 'remote_cycle_start') {
+            // Captured from the official ThinQ app during a real remote-start cycle. Initial plus
+            // the appliance-reported remote-control flag means the physical controls have armed
+            // remote operation; every other state is rejected even if MQTT invokes the button.
+            if (mqttValue !== 'PRESS' || this.currentState !== 0x01 || !this.remoteStartEnabled) return
+            return this.send(Buffer.from('F0E5000201FF010301', 'hex'))
+        }
+
         const setting = CYCLE_SETTINGS.find((candidate) => CONTROL_PROPERTY[candidate] === prop)
         if (setting !== undefined) {
             if (this.currentState !== 0x01) return
@@ -840,6 +866,7 @@ export default class Device extends AABBDevice {
         this.publishProperty('child_lock', (block[37] & 0x20) !== 0 ? 'ON' : 'OFF')
         this.remoteStartEnabled = (block[37] & 0x10) !== 0
         this.publishProperty('remote_start', this.remoteStartEnabled ? 'ON' : 'OFF')
+        this.publishProperty('remote_cycle_start_available', state === 0x01 && this.remoteStartEnabled ? 'ON' : 'OFF')
         this.publishProperty('laundry_care_available', state === 0x2a && this.remoteStartEnabled ? 'ON' : 'OFF')
         this.publishProperty('door_lock', (block[38] & 0x01) !== 0 ? 'ON' : 'OFF')
 
