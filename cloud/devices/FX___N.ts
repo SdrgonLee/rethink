@@ -16,7 +16,8 @@ import { allowExtendedType } from '@/util/casting'
 //
 // Offsets were established from labelled power/door and full-cycle captures and checked against FX___N
 // ModelJSON. Power and the cycle-setting controls below reproduce frames captured from the official
-// ThinQ app. Start, pause and post-cycle laundry-care controls remain intentionally unavailable.
+// ThinQ app. Start and pause remain intentionally unavailable. Laundry care is exposed only after a
+// completed cycle while the appliance still reports remote control as enabled.
 
 const HEADER_LENGTH = 13
 const COMPACT_HEADER_LENGTH = 9
@@ -193,6 +194,8 @@ function minutes(block: Buffer, offset: number): number {
 export default class Device extends AABBDevice {
     private readonly korean: boolean
     private poweredOn = false
+    private currentState = 0
+    private remoteStartEnabled = false
     private actual: PendingSettings = {}
     private pending: PendingSettings = {}
 
@@ -230,6 +233,13 @@ export default class Device extends AABBDevice {
                         command_topic: '$this/power/set',
                         name: name('Power control', '전원 제어'),
                         icon: 'mdi:power',
+                    },
+                    laundry_care_start: {
+                        platform: 'button',
+                        unique_id: '$deviceid-laundry-care-start',
+                        command_topic: '$this/laundry_care_start/set',
+                        name: name('Start laundry care', '세탁물 케어 시작'),
+                        icon: 'mdi:tshirt-crew-outline',
                     },
                     course_control: {
                         platform: 'select',
@@ -316,15 +326,6 @@ export default class Device extends AABBDevice {
                         unit_of_measurement: 'min',
                         icon: 'mdi:timer-sand',
                     },
-                    reserve_time: {
-                        platform: 'sensor',
-                        unique_id: '$deviceid-reserve-time',
-                        state_topic: '$this/reserve_time',
-                        name: courseName('Reserved start time', '예약 시간'),
-                        device_class: 'duration',
-                        unit_of_measurement: 'min',
-                        icon: 'mdi:clock-outline',
-                    },
                     reserve_time_control: {
                         platform: 'select',
                         unique_id: '$deviceid-reserve-time-control',
@@ -401,6 +402,7 @@ export default class Device extends AABBDevice {
                 apply_cycle_settings: { platform: 'button' },
                 pre_wash: { platform: 'binary_sensor' },
                 steam: { platform: 'binary_sensor' },
+                reserve_time: { platform: 'sensor' },
             },
         )
     }
@@ -486,6 +488,14 @@ export default class Device extends AABBDevice {
             return this.send(Buffer.from([0xf0, 0xe5, 0x00, 0x02, 0x01, 0xff, 0x01, 0x0a, code]))
         }
 
+        if (prop === 'laundry_care_start') {
+            // Captured from the official ThinQ app at the real post-cycle Complete state. Sending
+            // 0x57 outside this narrow state can alter cycle options or start an unintended cycle,
+            // so do not forward the button unless both appliance-reported guards are satisfied.
+            if (mqttValue !== 'PRESS' || this.currentState !== 0x2a || !this.remoteStartEnabled) return
+            return this.send(Buffer.from('F0E5000201FF015701', 'hex'))
+        }
+
         const setting = CYCLE_SETTINGS.find((candidate) => CONTROL_PROPERTY[candidate] === prop)
         if (setting !== undefined) {
             if (!this.poweredOn) return
@@ -566,15 +576,15 @@ export default class Device extends AABBDevice {
         const state = block[21]
         const isOff = state === 0
         this.poweredOn = !isOff
+        this.currentState = state
         this.publishProperty('power', isOff ? 'OFF' : 'ON')
         this.publishProperty('status', STATUS[state] ?? 'Running')
         this.publishProperty('remaining_time', isOff ? 0 : minutes(block, 13))
         this.publishProperty('initial_time', isOff ? 0 : minutes(block, 15))
         const reserve = isOff ? 0 : minutes(block, 11)
-        this.publishProperty('reserve_time', reserve)
-        // The existing duration sensor remains the live countdown. The control select only updates
-        // for values the app can configure (0 or 3h..19h in 30-minute steps), so a 179-minute
-        // countdown does not replace its last confirmed "Finish in 3 hours" selection.
+        // The control select only updates for values the app can configure (0 or 3h..19h in
+        // 30-minute steps), so a live 179-minute countdown does not replace its last confirmed
+        // "Finish in 3 hours" selection.
         if (isOff) this.publishActualSetting('reserve', 0)
         this.publishProperty('error', ERROR[block[19]] ?? `Unknown (${block[19]})`)
         this.publishProperty('tub_clean_count', block[28])
@@ -582,7 +592,8 @@ export default class Device extends AABBDevice {
         const turbo = (block[34] & 0x20) !== 0 ? 1 : 0
         this.publishProperty('crease_care', (block[36] & 0x80) !== 0 ? 'ON' : 'OFF')
         this.publishProperty('child_lock', (block[37] & 0x20) !== 0 ? 'ON' : 'OFF')
-        this.publishProperty('remote_start', (block[37] & 0x10) !== 0 ? 'ON' : 'OFF')
+        this.remoteStartEnabled = (block[37] & 0x10) !== 0
+        this.publishProperty('remote_start', this.remoteStartEnabled ? 'ON' : 'OFF')
         this.publishProperty('door_lock', (block[38] & 0x01) !== 0 ? 'ON' : 'OFF')
 
         // Powered-off blocks contain sentinels and a mixture of retained settings, so they must not
