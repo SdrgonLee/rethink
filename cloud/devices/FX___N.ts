@@ -1,6 +1,6 @@
 import HADevice from './base'
 import AABBDevice from './aabb_device'
-import { type Connection } from '../homeassistant'
+import { type ComponentInfo, type Connection } from '../homeassistant'
 import { type Metadata } from '../thinq'
 import { Device as Thinq2Device } from '../thinq2/device'
 import { allowExtendedType } from '@/util/casting'
@@ -126,6 +126,10 @@ const CONTROL_PROPERTY: Record<CycleSetting, string> = {
     reserve: 'reserve_time_control',
 }
 const CYCLE_SETTINGS = Object.keys(CONTROL_PROPERTY) as CycleSetting[]
+const COURSE_CONTROL_OPTIONS: ReadonlyArray<readonly [property: string, options: LocalOption[]]> = [
+    ['course_control', COURSE_OPTIONS],
+    ...CYCLE_SETTINGS.map((setting) => [CONTROL_PROPERTY[setting], SETTING_OPTIONS[setting]] as const),
+]
 
 const STATUS: Record<number, string> = {
     0x00: 'Off',
@@ -193,11 +197,11 @@ function minutes(block: Buffer, offset: number): number {
 
 export default class Device extends AABBDevice {
     private readonly korean: boolean
-    private poweredOn = false
     private currentState = 0
     private remoteStartEnabled = false
     private actual: PendingSettings = {}
     private pending: PendingSettings = {}
+    private readonly reportedControlLabels: Record<string, string> = {}
 
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq)
@@ -205,13 +209,8 @@ export default class Device extends AABBDevice {
         this.korean = korean
         const name = (english: string, koreanName: string) => (korean ? koreanName : english)
         const options = (items: LocalOption[]) => items.map((item) => (korean ? item.ko : item.en))
-        // MQTT discovery does not expose Home Assistant integration translation keys. Keep the
-        // locale-specific discovery names here, while sharing stable prefixes so HA's Sensor card
-        // naturally groups current operating state separately from the selected course settings.
-        const statusName = (english: string, koreanName: string) =>
-            `${korean ? '상태' : 'Status'} · ${name(english, koreanName)}`
-        const courseName = (english: string, koreanName: string) =>
-            `${korean ? '코스' : 'Course'} · ${name(english, koreanName)}`
+        // MQTT discovery does not expose Home Assistant integration translation keys, so names and
+        // options use the locale reported by the appliance registration metadata.
         // The platform-only entries remove the 0.1.18 duplicate sensors/button before the final
         // device-based discovery config is published without them.
         this.setConfig(
@@ -249,7 +248,7 @@ export default class Device extends AABBDevice {
                         unique_id: '$deviceid-course-control',
                         state_topic: '$this/course_control',
                         command_topic: '$this/course_control/set',
-                        name: courseName('Program', '코스'),
+                        name: name('Program', '코스'),
                         options: options(COURSE_OPTIONS),
                         optimistic: false,
                         icon: 'mdi:playlist-edit',
@@ -259,7 +258,7 @@ export default class Device extends AABBDevice {
                         unique_id: '$deviceid-soil-control',
                         state_topic: '$this/soil_control',
                         command_topic: '$this/soil_control/set',
-                        name: courseName('Soil level', '오염도'),
+                        name: name('Soil level', '오염도'),
                         options: options(SOIL_OPTIONS),
                         optimistic: false,
                         icon: 'mdi:liquid-spot',
@@ -269,7 +268,7 @@ export default class Device extends AABBDevice {
                         unique_id: '$deviceid-rinse-control',
                         state_topic: '$this/rinse_control',
                         command_topic: '$this/rinse_control/set',
-                        name: courseName('Rinse count', '헹굼 횟수'),
+                        name: name('Rinse count', '헹굼 횟수'),
                         options: options(RINSE_OPTIONS),
                         optimistic: false,
                         icon: 'mdi:water-sync',
@@ -279,7 +278,7 @@ export default class Device extends AABBDevice {
                         unique_id: '$deviceid-spin-control',
                         state_topic: '$this/spin_control',
                         command_topic: '$this/spin_control/set',
-                        name: courseName('Spin level', '탈수 세기'),
+                        name: name('Spin level', '탈수 세기'),
                         options: options(SPIN_OPTIONS),
                         optimistic: false,
                         icon: 'mdi:rotate-right',
@@ -289,7 +288,7 @@ export default class Device extends AABBDevice {
                         unique_id: '$deviceid-temperature-control',
                         state_topic: '$this/temperature_control',
                         command_topic: '$this/temperature_control/set',
-                        name: courseName('Wash temperature', '세탁 온도'),
+                        name: name('Wash temperature', '세탁 온도'),
                         options: options(TEMPERATURE_OPTIONS),
                         optimistic: false,
                         icon: 'mdi:thermometer',
@@ -299,7 +298,7 @@ export default class Device extends AABBDevice {
                         unique_id: '$deviceid-turbo-wash-control',
                         state_topic: '$this/turbo_wash_control',
                         command_topic: '$this/turbo_wash_control/set',
-                        name: courseName('TurboWash', '터보샷'),
+                        name: name('TurboWash', '터보샷'),
                         options: options(TURBO_OPTIONS),
                         optimistic: false,
                         icon: 'mdi:rocket-launch',
@@ -308,14 +307,14 @@ export default class Device extends AABBDevice {
                         platform: 'sensor',
                         unique_id: '$deviceid-status',
                         state_topic: '$this/status',
-                        name: statusName('Current status', '현재 상태'),
+                        name: name('Current status', '현재 상태'),
                         icon: 'mdi:state-machine',
                     },
                     remaining_time: {
                         platform: 'sensor',
                         unique_id: '$deviceid-remaining-time',
                         state_topic: '$this/remaining_time',
-                        name: statusName('Remaining time', '남은 시간'),
+                        name: name('Remaining time', '남은 시간'),
                         device_class: 'duration',
                         unit_of_measurement: 'min',
                         icon: 'mdi:timer-outline',
@@ -324,7 +323,7 @@ export default class Device extends AABBDevice {
                         platform: 'sensor',
                         unique_id: '$deviceid-initial-time',
                         state_topic: '$this/initial_time',
-                        name: statusName('Initial time', '전체 시간'),
+                        name: name('Initial time', '전체 시간'),
                         device_class: 'duration',
                         unit_of_measurement: 'min',
                         icon: 'mdi:timer-sand',
@@ -334,7 +333,7 @@ export default class Device extends AABBDevice {
                         unique_id: '$deviceid-reserve-time-control',
                         state_topic: '$this/reserve_time_control',
                         command_topic: '$this/reserve_time_control/set',
-                        name: courseName('Reserved completion', '예약 완료'),
+                        name: name('Reserved completion', '예약 완료'),
                         options: options(RESERVE_OPTIONS),
                         optimistic: false,
                         icon: 'mdi:clock-outline',
@@ -343,7 +342,7 @@ export default class Device extends AABBDevice {
                         platform: 'binary_sensor',
                         unique_id: '$deviceid-door',
                         state_topic: '$this/door',
-                        name: statusName('Door', '문'),
+                        name: name('Door', '문'),
                         device_class: 'door',
                     },
                     door_lock: {
@@ -352,27 +351,26 @@ export default class Device extends AABBDevice {
                         state_topic: '$this/door_lock',
                         name: name('Door lock', '문 잠금'),
                         icon: 'mdi:lock',
-                        entity_category: 'diagnostic',
                     },
                     child_lock: {
                         platform: 'binary_sensor',
                         unique_id: '$deviceid-child-lock',
                         state_topic: '$this/child_lock',
-                        name: statusName('Child lock', '버튼 잠금'),
+                        name: name('Child lock', '버튼 잠금'),
                         icon: 'mdi:account-lock',
                     },
                     remote_start: {
                         platform: 'binary_sensor',
                         unique_id: '$deviceid-remote-start',
                         state_topic: '$this/remote_start',
-                        name: statusName('Remote start', '원격 제어'),
+                        name: name('Remote start', '원격 제어'),
                         icon: 'mdi:remote',
                     },
                     crease_care: {
                         platform: 'binary_sensor',
                         unique_id: '$deviceid-crease-care',
                         state_topic: '$this/crease_care',
-                        name: courseName('Crease care', '구김방지'),
+                        name: name('Crease care', '구김방지'),
                         icon: 'mdi:tshirt-crew-outline',
                     },
                     tub_clean_count: {
@@ -384,6 +382,7 @@ export default class Device extends AABBDevice {
                         // views from 12 to 13 at the same instant.
                         name: name('Use count', '사용 횟수'),
                         icon: 'mdi:counter',
+                        entity_category: 'diagnostic',
                     },
                     error: {
                         platform: 'sensor',
@@ -485,7 +484,7 @@ export default class Device extends AABBDevice {
         }
 
         if (prop === 'course_control') {
-            if (!this.poweredOn) return
+            if (this.currentState !== 0x01) return
             const code = this.codeFor(COURSE_OPTIONS, mqttValue)
             if (code === undefined) return
             this.pending.course = code
@@ -502,7 +501,7 @@ export default class Device extends AABBDevice {
 
         const setting = CYCLE_SETTINGS.find((candidate) => CONTROL_PROPERTY[candidate] === prop)
         if (setting !== undefined) {
-            if (!this.poweredOn) return
+            if (this.currentState !== 0x01) return
             const code = this.codeFor(SETTING_OPTIONS[setting], mqttValue)
             if (code === undefined) return
             this.pending[setting] = code
@@ -519,9 +518,42 @@ export default class Device extends AABBDevice {
         return options.find((item) => item.writable !== false && (this.korean ? item.ko : item.en) === label)?.code
     }
 
-    private publishActualSetting(setting: CycleSetting, code: number) {
+    private rememberActualSetting(setting: CycleSetting, code: number): string | undefined {
         const label = this.labelFor(SETTING_OPTIONS[setting], code)
+        if (label !== undefined) {
+            this.reportedControlLabels[CONTROL_PROPERTY[setting]] = label
+        }
+        return label
+    }
+
+    private publishActualSetting(setting: CycleSetting, code: number) {
+        const label = this.rememberActualSetting(setting, code)
         if (label !== undefined) this.publishProperty(CONTROL_PROPERTY[setting], label)
+    }
+
+    private updateCourseControlOptions(editable: boolean) {
+        if (this.config === undefined) return
+
+        let changed = false
+        const components = { ...this.config.components } as Record<string, ComponentInfo & Record<string, unknown>>
+        for (const [property, optionDefinitions] of COURSE_CONTROL_OPTIONS) {
+            const component = components[property]
+            if (component === undefined) continue
+            const desired = editable
+                ? optionDefinitions.map((option) => (this.korean ? option.ko : option.en))
+                : this.reportedControlLabels[property] === undefined
+                  ? []
+                  : [this.reportedControlLabels[property]]
+            const current = component.options as string[]
+            if (current.length === desired.length && current.every((option, index) => option === desired[index]))
+                continue
+            components[property] = { ...component, options: desired }
+            changed = true
+        }
+
+        if (!changed) return
+        this.config = { ...this.config, components }
+        this.publishConfig()
     }
 
     private sendSettings(settings: PendingSettings) {
@@ -579,7 +611,6 @@ export default class Device extends AABBDevice {
 
         const state = block[21]
         const isOff = state === 0
-        this.poweredOn = !isOff
         this.currentState = state
         this.publishProperty('power', isOff ? 'OFF' : 'ON')
         this.publishProperty('status', STATUS[state] ?? 'Running')
@@ -589,7 +620,7 @@ export default class Device extends AABBDevice {
         // The control select only updates for values the app can configure (0 or 3h..19h in
         // 30-minute steps), so a live 179-minute countdown does not replace its last confirmed
         // "Finish in 3 hours" selection.
-        if (isOff) this.publishActualSetting('reserve', 0)
+        if (isOff) this.rememberActualSetting('reserve', 0)
         this.publishProperty('error', ERROR[block[19]] ?? `Unknown (${block[19]})`)
         this.publishProperty('tub_clean_count', block[28])
 
@@ -598,15 +629,16 @@ export default class Device extends AABBDevice {
         this.publishProperty('child_lock', (block[37] & 0x20) !== 0 ? 'ON' : 'OFF')
         this.remoteStartEnabled = (block[37] & 0x10) !== 0
         this.publishProperty('remote_start', this.remoteStartEnabled ? 'ON' : 'OFF')
-        this.publishProperty(
-            'laundry_care_available',
-            state === 0x2a && this.remoteStartEnabled ? 'ON' : 'OFF',
-        )
+        this.publishProperty('laundry_care_available', state === 0x2a && this.remoteStartEnabled ? 'ON' : 'OFF')
         this.publishProperty('door_lock', (block[38] & 0x01) !== 0 ? 'ON' : 'OFF')
 
         // Powered-off blocks contain sentinels and a mixture of retained settings, so they must not
         // replace pending controls. A powered-on state frame is the appliance's authoritative state.
-        if (isOff) return
+        if (isOff) {
+            this.updateCourseControlOptions(false)
+            this.publishActualSetting('reserve', 0)
+            return
+        }
 
         this.actual = {
             course: block[5],
@@ -620,6 +652,11 @@ export default class Device extends AABBDevice {
         this.pending = {}
 
         const course = this.labelFor(COURSE_OPTIONS, this.actual.course!)
+        if (course !== undefined) this.reportedControlLabels.course_control = course
+        for (const setting of CYCLE_SETTINGS) this.rememberActualSetting(setting, this.actual[setting]!)
+        // Update a narrowed option list before publishing any newly reported value, otherwise Home
+        // Assistant can briefly reject a value that was not part of the preceding one-item list.
+        this.updateCourseControlOptions(state === 0x01)
         if (course !== undefined) this.publishProperty('course_control', course)
         for (const setting of CYCLE_SETTINGS) this.publishActualSetting(setting, this.actual[setting]!)
     }

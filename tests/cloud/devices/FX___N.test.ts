@@ -155,20 +155,20 @@ describe('FX___N', () => {
                 ].map((id) => [id, components[id].name]),
             ),
             {
-                status: 'Status · Current status',
-                remaining_time: 'Status · Remaining time',
-                initial_time: 'Status · Initial time',
-                door: 'Status · Door',
-                child_lock: 'Status · Child lock',
-                remote_start: 'Status · Remote start',
-                course_control: 'Course · Program',
-                reserve_time_control: 'Course · Reserved completion',
-                soil_control: 'Course · Soil level',
-                rinse_control: 'Course · Rinse count',
-                spin_control: 'Course · Spin level',
-                temperature_control: 'Course · Wash temperature',
-                turbo_wash_control: 'Course · TurboWash',
-                crease_care: 'Course · Crease care',
+                status: 'Current status',
+                remaining_time: 'Remaining time',
+                initial_time: 'Initial time',
+                door: 'Door',
+                child_lock: 'Child lock',
+                remote_start: 'Remote start',
+                course_control: 'Program',
+                reserve_time_control: 'Reserved completion',
+                soil_control: 'Soil level',
+                rinse_control: 'Rinse count',
+                spin_control: 'Spin level',
+                temperature_control: 'Wash temperature',
+                turbo_wash_control: 'TurboWash',
+                crease_care: 'Crease care',
             },
         )
         for (const id of [
@@ -181,11 +181,11 @@ describe('FX___N', () => {
             'turbo_wash_control',
             'crease_care',
         ]) {
-            assert.match(components[id].name as string, /^Course · /, `${id} sorts with course settings`)
+            assert.doesNotMatch(components[id].name as string, /^(?:Course|Status) · /)
             assert.equal(components[id].entity_category, undefined, `${id} remains in the normal entity section`)
         }
         for (const id of ['status', 'remaining_time', 'initial_time', 'door', 'child_lock', 'remote_start']) {
-            assert.match(components[id].name as string, /^Status · /, `${id} sorts with current status`)
+            assert.doesNotMatch(components[id].name as string, /^(?:Course|Status) · /)
             assert.equal(components[id].entity_category, undefined, `${id} remains in the Sensor section`)
         }
         for (const [id, component] of Object.entries(components)) {
@@ -193,8 +193,8 @@ describe('FX___N', () => {
             assert.notEqual(component.entity_category, 'config', `${id} must use an MQTT-supported entity category`)
         }
         assert.equal(components.tub_clean_count.name, 'Use count')
-        assert.equal(components.tub_clean_count.entity_category, undefined)
-        assert.equal(components.door_lock.entity_category, 'diagnostic')
+        assert.equal(components.tub_clean_count.entity_category, 'diagnostic')
+        assert.equal(components.door_lock.entity_category, undefined)
     })
 
     test('uses LG Korean display names and preserves the existing select discovery identities', () => {
@@ -222,20 +222,20 @@ describe('FX___N', () => {
                 ].map((id) => [id, components[id].name]),
             ),
             {
-                status: '상태 · 현재 상태',
-                remaining_time: '상태 · 남은 시간',
-                initial_time: '상태 · 전체 시간',
-                door: '상태 · 문',
-                child_lock: '상태 · 버튼 잠금',
-                remote_start: '상태 · 원격 제어',
-                course_control: '코스 · 코스',
-                reserve_time_control: '코스 · 예약 완료',
-                soil_control: '코스 · 오염도',
-                rinse_control: '코스 · 헹굼 횟수',
-                spin_control: '코스 · 탈수 세기',
-                temperature_control: '코스 · 세탁 온도',
-                turbo_wash_control: '코스 · 터보샷',
-                crease_care: '코스 · 구김방지',
+                status: '현재 상태',
+                remaining_time: '남은 시간',
+                initial_time: '전체 시간',
+                door: '문',
+                child_lock: '버튼 잠금',
+                remote_start: '원격 제어',
+                course_control: '코스',
+                reserve_time_control: '예약 완료',
+                soil_control: '오염도',
+                rinse_control: '헹굼 횟수',
+                spin_control: '탈수 세기',
+                temperature_control: '세탁 온도',
+                turbo_wash_control: '터보샷',
+                crease_care: '구김방지',
             },
         )
         assert.equal(components.power_control.name, '전원')
@@ -329,6 +329,61 @@ describe('FX___N', () => {
         dev.setProperty('course_control', '이불')
         dev.setProperty('rinse_control', '1회')
         assert.deepEqual(thinq.outbox, [])
+    })
+
+    test('all course selects become current-value-only and reject writes outside Initial', () => {
+        const { ha, thinq, dev } = makeDevice(KOREAN_META)
+        thinq.emit('data', POWER_ON)
+        assert.ok(
+            ((ha.devices[DEVICE_ID].config!.components.course_control as Record<string, unknown>).options as string[])
+                .length > 1,
+        )
+
+        thinq.emit('data', CYCLE_WASHING)
+        const runningComponents = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
+        assert.deepEqual(
+            Object.fromEntries(
+                [
+                    'course_control',
+                    'soil_control',
+                    'rinse_control',
+                    'spin_control',
+                    'temperature_control',
+                    'turbo_wash_control',
+                    'reserve_time_control',
+                ].map((id) => [id, runningComponents[id].options]),
+            ),
+            {
+                course_control: ['표준'],
+                soil_control: ['표준'],
+                rinse_control: ['2회'],
+                spin_control: ['강'],
+                temperature_control: ['30℃'],
+                turbo_wash_control: ['켜짐'],
+                reserve_time_control: ['예약 안 함'],
+            },
+        )
+        assert.equal(ha.devices[DEVICE_ID].properties.course_control, '표준', 'reported state remains visible')
+
+        thinq.resetRecorder()
+        for (const [property, value] of [
+            ['course_control', '이불'],
+            ['soil_control', '강력'],
+            ['rinse_control', '1회'],
+            ['spin_control', '중'],
+            ['temperature_control', '40℃'],
+            ['turbo_wash_control', '꺼짐'],
+            ['reserve_time_control', '3시간 뒤 완료'],
+        ])
+            dev.setProperty(property, value)
+        assert.deepEqual(thinq.outbox, [], 'running-state writes are blocked behind the discovery UI')
+
+        thinq.emit('data', POWER_ON)
+        const initialComponents = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
+        assert.ok((initialComponents.course_control.options as string[]).length > 1)
+        assert.ok((initialComponents.rinse_control.options as string[]).length > 1)
+        dev.setProperty('course_control', '이불')
+        assert.deepEqual(thinq.outbox, [buf('AA0DF0E5000201FF010A1BE1BB')])
     })
 
     test('real 0x55 resync decodes the powered-off state without a stale countdown', () => {
