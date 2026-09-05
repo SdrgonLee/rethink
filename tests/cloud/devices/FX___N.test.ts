@@ -261,7 +261,7 @@ describe('FX___N', () => {
         assert.equal(reserveOptions[reserveOptions.length - 1], '19시간 뒤 완료')
     })
 
-    test('publishes platform-only removal updates before omitting legacy duplicate entities', () => {
+    test('publishes platform-only migration updates before removing or refreshing entities', () => {
         const { ha } = makeDevice()
         assert.equal(ha.configHistory.length, 2)
         const migration = ha.configHistory[0].config.components as Record<string, Record<string, unknown>>
@@ -273,6 +273,8 @@ describe('FX___N', () => {
         assert.deepEqual(migration.steam, { platform: 'binary_sensor' })
         assert.deepEqual(migration.reserve_time, { platform: 'sensor' })
         assert.deepEqual(migration.power, { platform: 'binary_sensor' })
+        assert.deepEqual(migration.door_lock, { platform: 'binary_sensor' })
+        assert.deepEqual(migration.tub_clean_count, { platform: 'sensor' })
         for (const id of [
             'course',
             'soil',
@@ -288,6 +290,10 @@ describe('FX___N', () => {
         ])
             assert.equal(final[id], undefined)
         assert.equal(final.reserve_time_control.platform, 'select')
+        assert.equal(final.door_lock.unique_id, '$deviceid-door-lock')
+        assert.equal(final.door_lock.entity_category, undefined)
+        assert.equal(final.tub_clean_count.unique_id, '$deviceid-tub-clean-count')
+        assert.equal(final.tub_clean_count.entity_category, 'diagnostic')
     })
 
     test('HA power writes reproduce both official ThinQ command frames byte-for-byte', () => {

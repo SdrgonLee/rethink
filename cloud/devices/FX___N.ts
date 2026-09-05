@@ -211,8 +211,9 @@ export default class Device extends AABBDevice {
         const options = (items: LocalOption[]) => items.map((item) => (korean ? item.ko : item.en))
         // MQTT discovery does not expose Home Assistant integration translation keys, so names and
         // options use the locale reported by the appliance registration metadata.
-        // The platform-only entries remove the 0.1.18 duplicate sensors/button before the final
-        // device-based discovery config is published without them.
+        // Platform-only entries remove obsolete components and refresh existing entities whose
+        // Home Assistant registry metadata changed. The final discovery payload restores refreshed
+        // entities with the same unique_id, so their entity_id and automations remain compatible.
         this.setConfig(
             allowExtendedType({
                 ...HADevice.config(meta, { name: name('LG FX25 Washer', 'LG FX25 세탁기') }),
@@ -406,6 +407,13 @@ export default class Device extends AABBDevice {
                 steam: { platform: 'binary_sensor' },
                 reserve_time: { platform: 'sensor' },
                 power: { platform: 'binary_sensor' },
+            },
+            {
+                // entity_category is stored in HA's entity registry and is not migrated by an
+                // in-place MQTT discovery update. Re-register these two existing components so
+                // Door lock moves to Sensors and Use count moves to Diagnostic.
+                door_lock: { platform: 'binary_sensor' },
+                tub_clean_count: { platform: 'sensor' },
             },
         )
     }

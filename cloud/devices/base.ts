@@ -28,15 +28,22 @@ export default class HADevice {
         readonly id: string,
     ) {}
 
-    setConfig(config: DeviceDiscovery, removedComponents?: Record<string, { platform: string }>) {
+    setConfig(
+        config: DeviceDiscovery,
+        removedComponents?: Record<string, { platform: string }>,
+        refreshedComponents?: Record<string, { platform: string }>,
+    ) {
         this.config = config
-        if (removedComponents) {
+        if (removedComponents || refreshedComponents) {
             // Device-based MQTT discovery removes a component only after receiving a platform-only
             // update for that component. Send the removal form before the final current config.
+            // Components listed in refreshedComponents are present again in the final config; this
+            // forces Home Assistant to re-register metadata which is otherwise only applied when an
+            // entity is added (notably entity_category), while preserving its unique_id/entity_id.
             this.HA.publishProperty(this.id, 'availability', 'online')
             this.HA.publishConfig(this.id, {
                 ...config,
-                components: { ...config.components, ...removedComponents },
+                components: { ...config.components, ...removedComponents, ...refreshedComponents },
             } as unknown as DeviceDiscovery)
         }
         this.publishConfig()
