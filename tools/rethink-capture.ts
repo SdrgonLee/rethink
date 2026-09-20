@@ -62,7 +62,100 @@ function emit(event: object) {
     stream.write(JSON.stringify({ ts: Date.now(), ...event }) + '\n')
 }
 
-emit({ k: 'session', v: SCHEMA_VERSION, deviceId, tool: 'rethink-capture/0.2' })
+emit({ k: 'session', v: SCHEMA_VERSION, deviceId, tool: 'rethink-capture/0.3' })
+
+let lastML32Record: Buffer | undefined
+
+function ml32Record(record: Buffer) {
+    return {
+        hex: record.toString('hex').toUpperCase(),
+        offsets: Object.fromEntries(
+            [...record].map((value, offset) => [
+                offset.toString(16).padStart(2, '0'),
+                value.toString(16).padStart(2, '0').toUpperCase(),
+            ]),
+        ),
+    }
+}
+
+function recordML32(dir: 'fromDevice' | 'toDevice', raw: string, bodyHex: string) {
+    if (dir !== 'fromDevice') return
+
+    const body = Buffer.from(bodyHex, 'hex')
+    if (body.length < 2 || body[0] !== 0x40) return
+
+    const frame = `40${body[1].toString(16).padStart(2, '0').toUpperCase()}`
+    if (body[1] === 0xec && body.length === 58) {
+        const previous = body.subarray(2, 30)
+        const current = body.subarray(30, 58)
+        const changedOffsets = lastML32Record
+            ? [...current]
+                  .map((value, offset) => (value === lastML32Record![offset] ? -1 : offset))
+                  .filter((offset) => offset >= 0)
+            : [...current.keys()]
+
+        emit({
+            k: 'ml32',
+            frame,
+            hex: raw.toUpperCase(),
+            packetLength: raw.length / 2,
+            bodyLength: body.length,
+            previous: ml32Record(previous),
+            current: ml32Record(current),
+            changedOffsets,
+        })
+        logML32(frame, current, changedOffsets)
+        lastML32Record = Buffer.from(current)
+    } else if (body[1] === 0xeb && body.length === 30) {
+        const current = body.subarray(2, 30)
+        const changedOffsets = lastML32Record
+            ? [...current]
+                  .map((value, offset) => (value === lastML32Record![offset] ? -1 : offset))
+                  .filter((offset) => offset >= 0)
+            : [...current.keys()]
+
+        emit({
+            k: 'ml32',
+            frame,
+            hex: raw.toUpperCase(),
+            packetLength: raw.length / 2,
+            bodyLength: body.length,
+            current: ml32Record(current),
+            changedOffsets,
+        })
+        logML32(frame, current, changedOffsets)
+        lastML32Record = Buffer.from(current)
+    } else if (body[1] === 0xbf || body[1] === 0x72) {
+        emit({
+            k: 'ml32',
+            frame,
+            hex: raw.toUpperCase(),
+            packetLength: raw.length / 2,
+            bodyLength: body.length,
+        })
+        console.error(
+            `[ML32 ${frame}] packet=${raw.length / 2} bytes body=${body.length} bytes raw=${raw.toUpperCase()}`,
+        )
+    }
+}
+
+function logML32(frame: string, current: Buffer, changedOffsets: number[]) {
+    const remaining = current[3] * 3600 + current[4] * 60 + current[5]
+    const previousRemaining = lastML32Record
+        ? lastML32Record[3] * 3600 + lastML32Record[4] * 60 + lastML32Record[5]
+        : undefined
+    const significantChange = changedOffsets.some((offset) => offset < 3 || offset > 5)
+    const minuteChanged =
+        previousRemaining === undefined || Math.floor(previousRemaining / 60) !== Math.floor(remaining / 60)
+    if (!significantChange && !minuteChanged && remaining > 10) return
+
+    console.error(
+        `[ML32 ${frame}] changed=${changedOffsets.map((offset) => offset.toString(16).padStart(2, '0')).join(',') || '-'} ` +
+            `status=${current[0].toString(16).padStart(2, '0')} context=${current[1].toString(16).padStart(2, '0')}/${current[2].toString(16).padStart(2, '0')} ` +
+            `remaining=${current[3].toString().padStart(2, '0')}:${current[4].toString().padStart(2, '0')}:${current[5].toString().padStart(2, '0')} ` +
+            `target=${current[6].toString(16).padStart(2, '0')}`,
+    )
+}
 
 // A `wire` event: decode the hex and fold the decoded view in, but keep the raw hex.
 function recordWire(dir: 'fromDevice' | 'toDevice', raw: string, injected: boolean) {
@@ -93,6 +186,7 @@ function recordWire(dir: 'fromDevice' | 'toDevice', raw: string, injected: boole
             checksumOk: decoded.checksumOk,
             body: decoded.body,
         })
+        recordML32(dir, raw, decoded.body)
     } else {
         emit({ k: 'wire', dir, injected, hex: raw, protocol: 'unknown' })
     }
