@@ -24,6 +24,7 @@ import WTL_FXU_BDV_NA_01 from './devices/WTL_FXU_BDV_NA_01'
 import DHUM_056905_WW from './devices/DHUM_056905_WW'
 import ST_B_E4H01Y_APL from './devices/ST_B_E4H01Y_APL'
 import FX___N from './devices/FX___N'
+import ML32PWFOTA from './devices/ML32PWFOTA'
 import { Device as T1Device } from './thinq1/device'
 import { Device as T2Device } from './thinq2/device'
 import { type Connection } from './homeassistant'
@@ -71,6 +72,7 @@ const t2deviceTypes: Record<string, T2Factory> = {
     DHUM_056905_WW,
     ST_B_E4H01Y_APL,
     FX___N,
+    ML32PWFOTA,
 }
 
 class Bridge {
