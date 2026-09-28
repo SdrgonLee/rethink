@@ -42,6 +42,8 @@ const RUNNING_STATES = new Set([0x02, 0x03])
 const ACTIVE_STATES = new Set([0x01, 0x02, 0x03, 0x04, 0x06])
 const TOTAL_START_STATES = new Set([0x00, 0x01, 0x05, 0x06, 0x07])
 const MY_RECIPE_MARKER = 0x13
+const STATUS_QUERY = Buffer.from('F0EF0046', 'hex')
+const STATUS_QUERY_INTERVAL = 30_000
 
 function hex(value: number) {
     return `0x${value.toString(16).padStart(2, '0').toUpperCase()}`
@@ -50,6 +52,7 @@ function hex(value: number) {
 export default class Device extends AABBDevice {
     private readonly korean: boolean
     private cycleActive = false
+    private statusQueryTimer: ReturnType<typeof setInterval> | undefined
 
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq)
@@ -172,6 +175,19 @@ export default class Device extends AABBDevice {
             this.cycleActive = false
             this.publishProperty('total_time', 'None')
         }
+    }
+
+    start() {
+        this.send(STATUS_QUERY)
+        this.statusQueryTimer = setInterval(() => this.send(STATUS_QUERY), STATUS_QUERY_INTERVAL)
+    }
+
+    drop() {
+        if (this.statusQueryTimer !== undefined) {
+            clearInterval(this.statusQueryTimer)
+            this.statusQueryTimer = undefined
+        }
+        super.drop()
     }
 
     processAABB(buf: Buffer) {

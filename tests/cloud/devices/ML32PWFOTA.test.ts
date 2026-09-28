@@ -46,6 +46,24 @@ function makeDevice(meta = META) {
 }
 
 describe('ML32PWFOTA', () => {
+    test('queries status immediately and every 30 seconds until dropped', (t) => {
+        t.mock.timers.enable({ apis: ['setInterval'] })
+        const { thinq, dev } = makeDevice()
+
+        dev.start()
+        assert.deepEqual(thinq.outbox.map((packet) => packet.toString('hex').toUpperCase()), ['AA08F0EF004682BB'])
+
+        t.mock.timers.tick(30_000)
+        assert.deepEqual(thinq.outbox.map((packet) => packet.toString('hex').toUpperCase()), [
+            'AA08F0EF004682BB',
+            'AA08F0EF004682BB',
+        ])
+
+        dev.drop()
+        t.mock.timers.tick(30_000)
+        assert.equal(thinq.outbox.length, 2)
+    })
+
     test('publishes exactly five Korean read-only entities', () => {
         const { ha } = makeDevice()
         const config = ha.devices[DEVICE_ID].config!
