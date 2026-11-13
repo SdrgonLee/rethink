@@ -6,6 +6,7 @@ import {
     Thinq1Device,
     Thinq2Device,
 } from './thinqApi'
+import type { Metadata } from '@/cloud/thinq'
 import { AnyDevice, DeviceManager } from '../cloud/devmgr'
 import * as OAuth2 from './oauth2'
 import { BridgeState } from './state'
@@ -17,9 +18,14 @@ import { Device as T2Device } from '@/cloud/thinq2/device'
 import { Stream as T2Downstream } from '@/cloud/thinq2/multiplexer'
 import { TypedEmitter } from 'tiny-typed-emitter'
 import { MessageBody } from '@/cloud/thinq1/rti'
-import { ClipPayload } from '@/cloud/thinq2/clip'
+import { applicationFrame, ClipPayload, type ClipRxMessage } from '@/cloud/thinq2/clip'
 
 type StatusCallback = (status: string) => void
+
+type BridgeOptions = {
+    preserveExistingDevices?: boolean
+    createThinq2Device?: (deviceId: string, meta: Metadata) => Thinq2Device
+}
 
 const RECONNECT_PERIOD = 5000
 
@@ -75,20 +81,24 @@ class BridgedDevice extends TypedEmitter<BridgeDeviceEvents> {
             upstream.once('ready', () => {
                 const downstream = D.openStream()
                 this.downstream = downstream
-                downstream.on('packet', (packet: ClipPayload) => {
-                    // forward only what we understand
-                    if (packet.cmd === 'device_packet') upstream.send(packet)
+                downstream.on('packet', (packet: ClipPayload & Partial<ClipRxMessage>) => {
+                    if (packet.did !== undefined && packet.did !== D.id) return
+                    if (D.transparentBridge && packet[applicationFrame]) {
+                        upstream.send(packet)
+                    } else if (packet.cmd === 'device_packet') {
+                        const { [applicationFrame]: _frame, ...body } = packet
+                        upstream.send(body)
+                    }
                 })
 
                 upstream.on('packet', (packet) => {
-                    if (packet.cmd === 'packet') downstream.send(packet)
-
-                    if (packet.cmd === 'ack' && !D.managed) {
-                        // forward bridge acks only for devices that lack a handler
+                    // Keep upstream's ACK ownership for its handlers and the fork's cloud ACKs for FX25/ML32.
+                    if (D.transparentBridge) {
                         downstream.send(packet)
+                    } else if (packet.cmd === 'packet' || (packet.cmd === 'ack' && !D.managed)) {
+                        const { [applicationFrame]: _frame, ...body } = packet
+                        downstream.send(body)
                     }
-
-                    // discard everything else, notably anything related to firmware updates
                 })
             })
         } else {
@@ -162,13 +172,14 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
      *
      * rethink knows a device by its id and its model, which is enough to talk to it and useless for
      * telling four identical ceiling cassettes apart. The account already holds the answer; it was
-     * only ever read while registering a device (see registrationPlan), so it never reached the panel.
+     * only ever read while registering a device, so it never reached the panel.
      */
     deviceNames = new Map<string, string>()
 
     constructor(
         readonly state: BridgeState,
         readonly manager: DeviceManager,
+        readonly options: BridgeOptions = {},
     ) {
         super()
         this.manager.on('newDevice', this.#start.bind(this))
@@ -333,12 +344,17 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
 
         if (!deviceType) throw new Error('Device type must be specified')
 
+        const preserve = this.options.preserveExistingDevices === true
+        if (preserve && device.platform !== 'thinq2') {
+            throw new Error('Preserving an existing LG registration is supported only for ThinQ2 devices')
+        }
+
         // If the device is already registered with this account, we won't be re-adding it again.
         const hasDevice = (await client.listDevices()).find((dev) => dev.deviceId === device.id)
         // If we add it, we will use this name
         const alias = `Rethink ${device.id.substring(0, 8)}`
 
-        if (!hasDevice) {
+        if (!hasDevice && !preserve) {
             statusCallback('Removing device from home')
             await client.removeDevice(device.id)
         }
@@ -362,7 +378,8 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
             statusCallback('Fetching otp key')
             const otp = await client.prepareNewT2Device()
 
-            const t2 = new Thinq2Device(device.id, device.meta)
+            const t2 =
+                this.options.createThinq2Device?.(device.id, device.meta) ?? new Thinq2Device(device.id, device.meta)
             clientDevice = t2
 
             statusCallback('Registering new device')
@@ -376,7 +393,9 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
 
             if (!hasDevice) {
                 statusCallback('Adding device to home')
-                await client.addDevice(clientDevice, alias, deviceType, ciphertext)
+                await client.addDevice(clientDevice, alias, deviceType, ciphertext, !preserve)
+            } else if (preserve) {
+                statusCallback(`Preserving existing device registration (${hasDevice.alias})`)
             }
         } else {
             throw new Error('Unknown device platform')
@@ -384,6 +403,7 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
 
         statusCallback('Device registered successfully')
 
+        if (!clientDevice.state) throw new Error('Device registration completed without bridge state')
         this.state.setDeviceState(device.id, clientDevice.state)
         return clientDevice
     }

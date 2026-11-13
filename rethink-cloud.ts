@@ -65,7 +65,8 @@ const ca = await CA.loadOrCreate(config.ca_key_file, config.ca_cert_file)
 // redirection asks for an LG hostname rather than for ours. Every TLS listener serves a
 // leaf for config.hostname, and mints one on demand for whatever name is asked for.
 const issuer = new CertificateIssuer(ca, config.hostname)
-const tlsOptions = await issuer.listenerOptions()
+const tlsOptions =
+    config.sni_certificates === false ? await issuer.issue(config.hostname) : await issuer.listenerOptions()
 
 // Read now, not per request: a missing or unusable file should stop us at startup rather
 // than hand out a broken trust anchor once a device asks. It is served verbatim, and only
@@ -160,7 +161,7 @@ if (config.bridge) {
     mkdirSync(config.bridge.storage_path, { recursive: true })
     setResolverServers(config.bridge.dns)
     const storage = new JSONStorage(config.bridge.storage_path)
-    bridge = new Bridge(storage, manager)
+    bridge = new Bridge(storage, manager, { preserveExistingDevices: config.bridge.preserve_existing_devices })
 }
 
 if (config.management_port.bind) Management.app(ha, manager, bridge).listen(config.management_port.bind)

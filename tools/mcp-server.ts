@@ -144,7 +144,16 @@ type WireEvent = {
 }
 
 const DEVICE_BUFFER_MAX = 2000
-const deviceBuffer: WireEvent[] = []
+type ApplicationEvent = Pick<WireEvent, 'seq' | 'ts' | 'deviceId' | 'dir' | 'injected'> & {
+    k: 'application'
+    qos: 0 | 1 | 2
+    retain: boolean
+    encoding: 'base64'
+    payload: string
+    message?: unknown
+    text?: string
+}
+const deviceBuffer: (WireEvent | ApplicationEvent)[] = []
 let deviceSeq = 0
 
 type CaptureSocket = Pick<WebSocket, 'on' | 'close'>
@@ -197,7 +206,35 @@ export class DeviceCaptureController {
                 const type: WireType = msg.type === 'ack' ? 'ack' : 'packet'
                 if (typeof msg.rx === 'string') pushWire(deviceId, 'fromDevice', type, msg.rx, !!msg.injected)
                 else if (typeof msg.tx === 'string') pushWire(deviceId, 'toDevice', type, msg.tx, !!msg.injected)
-                else if (msg.status) entry.finish(msg.status)
+                else if (msg.application) {
+                    const { direction, qos, retain, payload } = msg.application
+                    if (
+                        (direction === 'fromDevice' || direction === 'toDevice') &&
+                        (qos === 0 || qos === 1 || qos === 2) &&
+                        typeof retain === 'boolean' &&
+                        typeof payload === 'string'
+                    ) {
+                        const text = Buffer.from(payload, 'base64').toString('utf8').replace(/\0+$/, '')
+                        let message: unknown
+                        try {
+                            message = JSON.parse(text)
+                        } catch {}
+                        deviceBuffer.push({
+                            k: 'application',
+                            seq: deviceSeq++,
+                            ts: Date.now(),
+                            deviceId,
+                            dir: direction,
+                            injected: !!msg.injected,
+                            qos,
+                            retain,
+                            encoding: 'base64',
+                            payload,
+                            ...(message === undefined ? { text } : { message }),
+                        })
+                        if (deviceBuffer.length > DEVICE_BUFFER_MAX) deviceBuffer.shift()
+                    }
+                } else if (msg.status) entry.finish(msg.status)
             })
             socket.on('error', (err: Error) => {
                 if (this.subscriptions.get(deviceId) === entry) this.subscriptions.delete(deviceId)
@@ -491,11 +528,12 @@ const tools: Record<string, { description: string; inputSchema: object; handler:
 
     read_device: {
         description:
-            'Read buffered device wire traffic captured by device_start (rx=fromDevice, tx=toDevice), decoded. Each event has a type: "packet", or "ack" for the cloud\'s delivery ack forwarded to a bridged ThinQ2 device (e.g. AABB f0 00 <type> 04 [<seq16>]). The in-memory live counterpart to read_capture (which reads a JSONL file). Filter by deviceId, dir, type, injected; page via cursor/limit (opaque sequence — pass back nextCursor). Correlate with read_cloud by timestamp (ts).',
+            'Read buffered wire and ThinQ2 application traffic captured by device_start. Wire events have type packet or ack. Application events have k=application and preserve base64 payload bytes. Filter by deviceId, kind, direction, wire type or injection state. Page via cursor/limit.',
         inputSchema: {
             type: 'object',
             properties: {
                 deviceId: { type: 'string' },
+                k: { type: 'string', enum: ['wire', 'application'] },
                 dir: { type: 'string', enum: ['fromDevice', 'toDevice'] },
                 type: { type: 'string', enum: ['packet', 'ack'] },
                 injected: { type: 'boolean' },
@@ -511,7 +549,8 @@ const tools: Record<string, { description: string; inputSchema: object; handler:
                 (e) =>
                     (args.deviceId === undefined || e.deviceId === String(args.deviceId)) &&
                     (args.dir === undefined || e.dir === args.dir) &&
-                    (args.type === undefined || e.type === args.type) &&
+                    (args.k === undefined || args.k === ('k' in e ? 'application' : 'wire')) &&
+                    (args.type === undefined || ('type' in e && e.type === args.type)) &&
                     (args.injected === undefined || e.injected === args.injected),
             )
             const cursor = Number(args.cursor ?? 0)

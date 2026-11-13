@@ -53,6 +53,8 @@ import Dev_1WPD6CMIDR__3 from './devices/1WPD6CMIDR__3'
 import WFV474PGV from './devices/WFV474PGV'
 import WLREL6323S from './devices/WLREL6323S'
 import D0211 from './devices/D0211'
+import FX___N from './devices/FX___N'
+import ML32PWFOTA from './devices/ML32PWFOTA'
 import { Device as T1Device } from './thinq1/device'
 import { Device as T2Device } from './thinq2/device'
 import { type Connection } from './homeassistant'
@@ -117,6 +119,8 @@ const t2deviceTypes: Record<string, T2Factory> = {
     DHUM_056905_WW,
     ST_B_E4H01Y_APL,
     S5MPC,
+    FX___N,
+    ML32PWFOTA,
     '1WPD6CMIDR__3': Dev_1WPD6CMIDR__3, // LG WD722RH water purifier
     WFV474PGV, // LG double oven/range
     WLREL6323S, // LG LREL6323S single-oven electric range

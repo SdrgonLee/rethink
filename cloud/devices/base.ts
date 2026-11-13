@@ -1,5 +1,6 @@
 import { type Metadata } from '../thinq'
 import type { Connection, DeviceDiscovery } from '../homeassistant'
+import { tombstone } from '../homeassistant'
 import log from '@/util/logging'
 
 export default class HADevice {
@@ -35,8 +36,24 @@ export default class HADevice {
         log(this.modelId, this.id, ...args)
     }
 
-    setConfig(config: DeviceDiscovery) {
+    setConfig(
+        config: DeviceDiscovery,
+        removedComponents?: Record<string, { platform: string }>,
+        refreshedComponents?: Record<string, { platform: string }>,
+    ) {
         this.config = config
+        if (removedComponents || refreshedComponents) {
+            // A category change requires a removal and rediscovery in Home Assistant.
+            const withdrawn = Object.entries({ ...removedComponents, ...refreshedComponents })
+            this.HA.publishProperty(this.id, 'availability', 'online')
+            this.HA.publishConfig(this.id, {
+                ...config,
+                components: {
+                    ...config.components,
+                    ...Object.fromEntries(withdrawn.map(([key, { platform }]) => [key, tombstone(platform)])),
+                },
+            })
+        }
         this.publishConfig()
     }
 

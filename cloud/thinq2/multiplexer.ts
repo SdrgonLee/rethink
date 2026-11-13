@@ -19,7 +19,11 @@ export class StreamImpl extends StreamBase implements Stream {
     }
 
     onPacket(buf: ClipPayload) {
-        this.emit('packet', buf)
+        try {
+            this.emit('packet', buf)
+        } catch (err) {
+            console.warn('ThinQ2 stream listener failed', err)
+        }
     }
 
     send(body: ClipPayload) {

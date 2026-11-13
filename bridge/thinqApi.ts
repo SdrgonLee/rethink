@@ -100,6 +100,8 @@ type HomeResponse = {
     }[]
 }
 
+export type HomeDevice = HomeResponse['devices'][number]
+
 type OtpResponse = { otp: string; publicKey: string }
 
 type ModelJsonResponse = {
@@ -174,11 +176,8 @@ export class Client {
         })
 
         if (profile.status !== 1) {
-            console.log(profile)
             throw new Error("Can't query user information")
         }
-
-        console.log(`Welcome ${profile.account.userID}!`)
 
         this.headers['x-user-no'] = profile.account.userNo
         this.headers['x-emp-token'] = accessToken
@@ -236,7 +235,13 @@ export class Client {
 
     // setting initDevice to true allows the device to be removed from the current account, but it triggers a failure if the device is not currently registered
     // ciphertext is required for Thinq2 devices
-    async addDevice(device: Device, alias: string, deviceType: string, ciphertext?: Buffer) {
+    async addDevice(
+        device: Device,
+        alias: string,
+        deviceType: string,
+        ciphertext?: Buffer,
+        allowInitDeviceRecovery = true,
+    ) {
         if (!this.homeId) throw new Error('Current home is not set')
 
         const { thinq2Uri } = await this.gateway
@@ -259,6 +264,11 @@ export class Client {
             })
         } catch (err) {
             if (err instanceof RemoteError && err.resultCode === ErrorCodes.ERROR_ALREADY_DEVICES_REGISTERED_IN_HOME) {
+                if (!allowInitDeviceRecovery) {
+                    throw new Error(
+                        `LG reported ${body.deviceId} as already registered, but it is not visible in the current Home; refusing initDevice:true recovery`,
+                    )
+                }
                 console.log('Device already registered, retrying with initDevice=true')
                 body.initDevice = true
                 await apiFetch(`${thinq2Uri}/service/homes/${this.homeId}/devices`, {

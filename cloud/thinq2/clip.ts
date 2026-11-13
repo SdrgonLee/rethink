@@ -1,7 +1,16 @@
+export const applicationFrame = Symbol('ThinQ2 application frame')
+
+export type ApplicationFrame = {
+    payload: Buffer
+    qos: 0 | 1 | 2
+    retain: boolean
+}
+
 export type ClipPayload<Cmd = string, Payload = unknown> = {
     cmd: Cmd
     data: Payload
     type: number
+    [applicationFrame]?: ApplicationFrame
 }
 
 // cloud->device

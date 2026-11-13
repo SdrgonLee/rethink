@@ -6,6 +6,7 @@ export type RawConfig = {
     ca_key_file: string
     ca_cert_file: string
     custom_root_cert_file?: string
+    sni_certificates?: boolean
     http_port?: PortDefinition
     https_port?: PortDefinition
     mqtts_port?: PortDefinition
@@ -17,6 +18,7 @@ export type RawConfig = {
     mqtt?: boolean
     bridge?: {
         storage_path: string
+        preserve_existing_devices?: boolean
         dns?: string[]
     }
     log?: string[]
@@ -37,6 +39,7 @@ export type Config = {
     ca_cert_file: string
     /** A root certificate to hand to devices in place of the CA's own, see config.jsonc. */
     custom_root_cert_file?: string
+    sni_certificates?: boolean
     http_port: Port
     https_port: AdvertisedPort
     mqtts_port: AdvertisedPort
@@ -48,6 +51,7 @@ export type Config = {
     mqtt: boolean
     bridge?: {
         storage_path: string
+        preserve_existing_devices?: boolean
         /** Resolvers for the bridge's upstream connections, see bridge/resolver.ts. */
         dns?: string[]
     }

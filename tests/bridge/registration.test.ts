@@ -130,6 +130,19 @@ describe('Client.addDevice', () => {
             (err: unknown) => err instanceof RemoteError && err.resultCode === ErrorCodes.ERROR_NO_PERMISSIONS,
         )
     })
+
+    test('does not retry an already registered device when recovery is disabled', async (t) => {
+        failNextCall(t, ErrorCodes.ERROR_ALREADY_DEVICES_REGISTERED_IN_HOME)
+        const client = makeClient()
+        await assert.rejects(
+            client.addDevice(new Thinq2Device(DEVICE_ID, META), 'Bedroom AC', '401', undefined, false),
+            /refusing initDevice:true recovery/,
+        )
+        assert.deepEqual(
+            api.postsTo('/devices').map(({ body }) => body.initDevice),
+            [false],
+        )
+    })
 })
 
 type Added = { deviceId: string; alias: string; deviceType: string }

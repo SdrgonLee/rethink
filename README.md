@@ -69,6 +69,7 @@ the second one is the model it is sold as.
 | F_VB_F\_\_\_W.B_2QEUK                            | CV74J7S2QA, Washer/Dryer Combo                   | 👍 mostly working            |
 | Y_V8_F\_\_\_W.B_2QEUK                            | W4WR70E61, Washer/Dryer Combo                    | 👍 mostly working            |
 | WTWN3 (ThinQ1)                                   | F4J7TN1W Washing Machine                         | 🫤 preliminary support       |
+| FX\_\_\_N                                        | LG FX25, Front-Loading Washing Machine           | Status, cycle settings, energy, and guarded remote controls |
 
 #### Dryers
 
@@ -118,6 +119,7 @@ the second one is the model it is sold as.
 | WLREL6323S  | LREL6323S, Electric Range               | 🫤 preliminary read-only oven and cooktop support                          |
 | WLSI_633\_  | LSIS6338FE, Slide-In Induction Range    | 👍 mostly working, read-only                                               |
 | WFV474PGV   | (model name unknown), Double Oven/Range | 🫤 preliminary status, timer, cancel, and constrained remote-start support |
+| ML32PWFOTA  | LG ML32 Lightwave Oven                  | Read-only status, program, target temperature, remaining time, and total time |
 
 #### Microwave ovens
 

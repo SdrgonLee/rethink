@@ -3,6 +3,7 @@ import type { ConnectionOptions } from 'node:tls'
 import { Thinq2Device } from './thinqApi'
 import { TypedEmitter } from 'tiny-typed-emitter'
 import {
+    applicationFrame,
     format,
     type ClipPayload,
     type DeployAppInfo,
@@ -47,7 +48,8 @@ export class Connection extends TypedEmitter<ConnectionEvents> {
         this.mqtt.on('message', (topic, message, packet) => {
             try {
                 if (topic === this.device.state!.subTopic) {
-                    const payload = JSON.parse(message.toString('utf-8')) as ClipPayload
+                    const payload = JSON.parse(message.toString('utf-8')) as ClipPayload & { did?: string }
+                    if (payload?.did !== this.device.deviceId || typeof payload.cmd !== 'string') return
                     if (payload.cmd === 'completeProvisioning') {
                         //msgtopic=payload.data.appInfo.publication.message
                         this.mqtt.publish(
@@ -63,12 +65,14 @@ export class Connection extends TypedEmitter<ConnectionEvents> {
                                 type: 1,
                             }),
                         )
-                    } else if (payload.cmd === 'packet' || payload.cmd === 'ack') {
-                        log('bridge', `${this.device.deviceId} <- ${format(payload)}`)
-                        this.emit('packet', payload)
                     } else {
-                        // not forwarded; logged in full to identify it from a capture
-                        log('bridge', `${this.device.deviceId} <- dropped ${format(payload)}`)
+                        payload[applicationFrame] = {
+                            payload: Buffer.from(message),
+                            qos: packet.qos,
+                            retain: packet.retain,
+                        }
+                        log('bridge', `${this.device.deviceId} <- ${payload.cmd}`)
+                        this.emit('packet', payload)
                     }
                 }
             } catch (err) {
@@ -107,6 +111,11 @@ export class Connection extends TypedEmitter<ConnectionEvents> {
     }
 
     send(packet: ClipPayload) {
+        const frame = packet[applicationFrame]
+        if (frame) {
+            this.mqtt.publish(this.device.state!.pubTopic, frame.payload, { qos: 0, retain: false })
+            return
+        }
         log('bridge', `${this.device.deviceId} -> ${format(packet)}`)
         this.mqtt.publish(
             this.device.state!.pubTopic,

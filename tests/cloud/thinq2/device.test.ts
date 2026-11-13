@@ -19,7 +19,15 @@ function deploy(appInfo: Partial<DeployAppInfo>): ClipDeployMessage {
 describe('deployMetadata', () => {
     test('uses softVer when the modem reports it', () => {
         const meta = deployMetadata(
-            deploy({ modelName: 'M', softVer: '1.2.3', appVersion: 'clip_x', DeviceType: '101' }),
+            deploy({
+                modelName: 'M',
+                softVer: '1.2.3',
+                appVersion: 'clip_x',
+                DeviceType: '101',
+                countryCode: 'KR',
+                subCountryCode: 'KR',
+                modelLanguage: '01',
+            }),
         )
         assert.deepEqual(meta, {
             modelId: '2REBGLUB_2P__',
@@ -27,6 +35,9 @@ describe('deployMetadata', () => {
             swVersion: '1.2.3',
             deviceType: '101',
             packageId: undefined,
+            countryCode: 'KR',
+            subCountryCode: 'KR',
+            modelLanguage: '01',
         })
     })
 

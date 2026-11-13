@@ -26,6 +26,8 @@ type Options = {
     https_advertise?: string
     mqtts_advertise?: string
     custom_root_cert_file?: string
+    sni_certificates?: boolean
+    preserve_existing_devices?: boolean
     config_file?: string
     bridge_dns?: string[]
     log?: string[]
@@ -127,6 +129,7 @@ export async function loadHassioConfig(configDir: string, optionsPath: string): 
         ca_key_file: 'ca.key',
         ca_cert_file: 'ca.cert',
         custom_root_cert_file: opts.custom_root_cert_file || undefined,
+        sni_certificates: opts.sni_certificates,
         https_port: port(443, opts.https_advertise),
         mqtts_port: port(8883, opts.mqtts_advertise),
         mqtt_port: 1884,
@@ -134,7 +137,13 @@ export async function loadHassioConfig(configDir: string, optionsPath: string): 
         // Bridge mode stays inert until an LG account is linked in the management panel,
         // so it costs nothing to always have the storage ready.
         // An empty list selects the system resolver
-        bridge: { storage_path: 'state', dns: opts.bridge_dns ?? DEFAULT_BRIDGE_DNS },
+        bridge: {
+            storage_path: 'state',
+            dns: opts.bridge_dns ?? DEFAULT_BRIDGE_DNS,
+            ...(opts.preserve_existing_devices === undefined
+                ? {}
+                : { preserve_existing_devices: opts.preserve_existing_devices }),
+        },
         log: opts.log ?? ['status', 'incoming', 'HTTPS', 'publish', 'MGMT'],
     }
 

@@ -76,6 +76,13 @@ describe('loadHassioConfig', () => {
         }
     })
 
+    test('reads the registration and SNI options', async () => {
+        const path = write('bridge-safety.json', { ...broker, preserve_existing_devices: true, sni_certificates: false })
+        const config = await loadHassioConfig(dir, path)
+        assert.equal(config.bridge?.preserve_existing_devices, true)
+        assert.equal(config.sni_certificates, false)
+    })
+
     test('an advertised port is taken as a number, anything else as a verbatim URL', async () => {
         const path = write('advertise.json', {
             ...broker,

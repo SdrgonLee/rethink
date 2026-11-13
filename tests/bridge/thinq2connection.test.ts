@@ -9,6 +9,7 @@ import { DeviceManager } from '@/cloud/devmgr'
 import type { Metadata } from '@/cloud/thinq'
 import { MockThinq2Device } from '../helpers/mocks'
 import { Stream } from '@/cloud/thinq2/multiplexer'
+import { applicationFrame, type ClipPayload } from '@/cloud/thinq2/clip'
 
 const DEVICE_ID = 'eff416a1-7832-132c-a6e7-3034db631a60'
 const META: Metadata = { modelId: 'BDVG_FX0003_US', modelName: 'BDVG_FX0003_US', swVersion: '0.0.0' }
@@ -129,12 +130,38 @@ describe('Thinq2Connection, bridged', () => {
         assert.deepEqual(device.sent, [])
     })
 
-    test('any other command is not forwarded', async () => {
+    test('forwards other application commands with their original bytes', async () => {
+        await connect()
+        device.transparentBridge = true
+        const payload = Buffer.from(`{ "did": "${DEVICE_ID}", "cmd": "somethingNew", "extra": 123 }`)
+        broker.publish({ topic: SUB_TOPIC, payload, qos: 0, dup: false, retain: false }, null)
+        await until(() => device.sent.length > 0, 'the application packet')
+        assert.equal(device.sent[0].cmd, 'somethingNew')
+        assert.deepEqual((device.sent[0] as ClipPayload)[applicationFrame]?.payload, payload)
+    })
+
+    test('forwards cloud ACKs for fork drivers that do not generate local ACKs', async () => {
+        await connect(true)
+        device.transparentBridge = true
+        fromCloud('ack', CLOUD_ACK)
+        await until(() => device.sent.length > 0, 'the ack')
+        assert.equal(device.sent[0].cmd, 'ack')
+    })
+
+    test('does not forward a cloud packet addressed to another device', async () => {
+        await connect()
+        const payload = Buffer.from(JSON.stringify({ did: 'other-device', cmd: 'packet', type: 1, data: 'AA00' }))
+        broker.publish({ topic: SUB_TOPIC, payload, qos: 0, dup: false, retain: false }, null)
+        fromCloud('packet', CLOUD_PACKET)
+        await until(() => device.outbox.length > 0, 'the valid packet')
+        assert.deepEqual(device.outbox, [Buffer.from(CLOUD_PACKET, 'hex')])
+    })
+
+    test('keeps the upstream command filter for other drivers', async () => {
         await connect()
         fromCloud('somethingNew', 'AA00')
-        fromCloud('packet', CLOUD_PACKET) // same connection, so it arrives after the one above
+        fromCloud('packet', CLOUD_PACKET)
         await until(() => device.outbox.length > 0, 'the packet')
-        assert.equal(device.outbox.length, 1)
         assert.deepEqual(device.sent, [])
     })
 })

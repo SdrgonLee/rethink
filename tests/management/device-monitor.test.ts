@@ -9,7 +9,7 @@ import { app } from '@/management'
 import { Device as T2Device } from '@/cloud/thinq2/device'
 import type { AnyDevice } from '@/cloud/devmgr'
 import { MockThinq1Device, MockThinq2Device } from '../helpers/mocks'
-import { customPayload, rxPacket, txAck, txPacket } from '@/cloud/thinq2/clip'
+import { applicationFrame, customPayload, rxPacket, txAck, txPacket } from '@/cloud/thinq2/clip'
 
 // The wire format that html/monitor.js, tools/rethink-capture.ts and tools/mcp-server.ts rely on.
 describe('device monitor protocol', () => {
@@ -62,6 +62,23 @@ describe('device monitor protocol', () => {
         const { received } = await monitor(device)
         device.inject(Buffer.from([0x01, 0xab]))
         assert.deepEqual(lowerHex(await received(1)), [{ rx: '01ab', injected: false, type: 'packet' }])
+    })
+
+    test('reports original ThinQ2 application bytes alongside the wire packet', async () => {
+        const device = new MockThinq2Device('device-1', META)
+        const { received } = await monitor(device)
+        const payload = Buffer.from('{"cmd":"device_packet","data":"01AB"}\0')
+        device.onPacket({
+            ...rxPacket(Buffer.from('01AB', 'hex')),
+            [applicationFrame]: { payload, qos: 1, retain: false },
+        })
+        assert.deepEqual(lowerHex(await received(2)), [
+            {
+                application: { direction: 'fromDevice', qos: 1, retain: false, payload: payload.toString('base64') },
+                injected: false,
+            },
+            { rx: '01ab', injected: false, type: 'packet' },
+        ])
     })
 
     test('ThinQ1 messages with a payload are reported, others are not', async () => {

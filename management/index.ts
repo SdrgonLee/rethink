@@ -12,7 +12,7 @@ import { Request, Response } from 'express'
 import { Device as T1Device } from '@/cloud/thinq1/device'
 import { Device as T2Device } from '@/cloud/thinq2/device'
 import { MessageBody, statusMessage } from '@/cloud/thinq1/rti'
-import { ClipPayload, rxPacket, txPacket } from '@/cloud/thinq2/clip'
+import { applicationFrame, ClipPayload, rxPacket, txPacket } from '@/cloud/thinq2/clip'
 
 // refresh bridged device names policy:
 // - only if a websocket subscriber is connected
@@ -286,11 +286,31 @@ export function app(ha: HA_bridge, manager: DeviceManager, bridge: Bridge | unde
                 sendPayload({ tx: JSON.stringify(packet) })
             }
 
+            const sendApplication = (direction: 'fromDevice' | 'toDevice', packet: ClipPayload) => {
+                const frame = packet[applicationFrame]
+                if (!frame) return
+                safeSend(
+                    ws,
+                    JSON.stringify({
+                        application: {
+                            direction,
+                            qos: frame.qos,
+                            retain: frame.retain,
+                            payload: frame.payload.toString('base64'),
+                        },
+                        injected: injectFlag,
+                    }),
+                )
+            }
+
             const onDeviceRxT2 = (packet: ClipPayload) => {
+                sendApplication('fromDevice', packet)
                 if (packet.cmd === 'device_packet' && typeof packet.data === 'string') sendPayload({ rx: packet.data })
             }
 
-            const onDeviceTxT2 = ({ cmd, data }: ClipPayload) => {
+            const onDeviceTxT2 = (packet: ClipPayload) => {
+                sendApplication('toDevice', packet)
+                const { cmd, data } = packet
                 if ((cmd === 'packet' || cmd === 'ack') && typeof data === 'string')
                     sendPayload({ tx: data, type: cmd })
             }

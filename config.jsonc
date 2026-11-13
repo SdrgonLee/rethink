@@ -72,13 +72,18 @@
   // specify anything you like. Removing this parameter disables the management interface
   "management_port": 44401,
 
+  // Set to false to serve only the default hostname certificate.
+  "sni_certificates": true,
+
   "bridge": {
     // The bridge must reach the real LG cloud, but the system resolver likely redirects the
     // ThinQ names back to rethink. If it does, list other servers here, tried in order: each
     // is a DNS-over-HTTPS URL or a plain DNS server address. DoH by IP address works even
     // where plain DNS on port 53 is intercepted. Empty or absent means the system resolver.
     "dns": ["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"],
-    "storage_path": "./state"
+    "storage_path": "./state",
+    // ThinQ2 only. Never remove an existing registration or retry with initDevice:true.
+    "preserve_existing_devices": false
   },
 
   "log": ["status", "incoming", "HTTPS", "publish", "MGMT"]
